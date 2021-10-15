@@ -9,6 +9,8 @@
 
 #include <asio.hpp>
 
+#include <asio/experimental/append.hpp>
+
 #include <iostream>
 
 namespace asio::experimental
@@ -45,6 +47,7 @@ struct expanding_circular_buffer
         auto result = storage_[front_pos_];
         if (++front_pos_ >= capacity_)
             front_pos_ -= capacity_;
+        size_ -= 1;
         return result;
     }
 
@@ -92,7 +95,7 @@ struct expanding_circular_buffer
             size = std::distance(first, last);
             assert(size == size_);
         }
-        storage_.reset(std::move(new_storage));
+        storage_   = std::move(new_storage);
         capacity_  = new_cap;
         front_pos_ = 0;
         back_pos_  = size;
@@ -105,16 +108,205 @@ struct expanding_circular_buffer
     std::unique_ptr< T[] > storage_;
 };
 
-struct semaphore_wait_op_concept
+}   // namespace detail
+
+template < class Executor = any_io_executor >
+struct basic_async_semaphore;
+
+struct semaphore_wait_op_concept;
+
+struct async_semaphore_base
 {
-    virtual void
-    invoke()                             = 0;
-    virtual ~semaphore_wait_op_concept() = 0;
+    async_semaphore_base(int initial_count);
+    async_semaphore_base(async_semaphore_base const &) = delete;
+    async_semaphore_base &
+    operator=(async_semaphore_base const &)       = delete;
+    async_semaphore_base(async_semaphore_base &&) = default;
+    async_semaphore_base &
+    operator=(async_semaphore_base &&) = default;
+    ~async_semaphore_base();
+
+    bool
+    try_acquire();
+
+    void
+    release();
+
+  protected:
+    void
+    add_waiter(semaphore_wait_op_concept *waiter);
+
+    int
+    decrement();
+
+    [[nodiscard]] int
+    count() const noexcept
+    {
+        return count_;
+    }
+
+  private:
+    detail::expanding_circular_buffer< semaphore_wait_op_concept * > waiters_;
+    int                                                              count_;
 };
 
-}   // namespace detail
-template < class Executor = any_io_executor >
-struct basic_async_semaphore
+struct semaphore_wait_op_concept
+{
+    semaphore_wait_op_concept(async_semaphore_base *host)
+    : host_(host)
+    {
+    }
+
+    virtual void complete(std::error_code) = 0;
+
+    async_semaphore_base *host_;
+};
+
+async_semaphore_base::async_semaphore_base(int initial_count)
+: waiters_()
+, count_(initial_count)
+{
+}
+
+async_semaphore_base::~async_semaphore_base()
+{
+    while (waiters_.size())
+        waiters_.pop()->complete(error::operation_aborted);
+}
+
+void
+async_semaphore_base::add_waiter(semaphore_wait_op_concept *waiter)
+{
+    waiters_.push(waiter);
+}
+
+void
+async_semaphore_base::release()
+{
+    count_ += 1;
+
+    // release a pending operations
+    if (!waiters_.size())
+        return;
+
+    auto next = waiters_.pop();
+    decrement();
+    next->complete(std::error_code());
+}
+
+bool
+async_semaphore_base::try_acquire()
+{
+    bool acquired = false;
+    if (count_ > 0)
+    {
+        --count_;
+        acquired = true;
+    }
+    return acquired;
+}
+
+int
+async_semaphore_base::decrement()
+{
+    assert(count_ > 0);
+    return --count_;
+}
+
+template < class Executor, class Handler >
+struct semaphore_wait_op_model : semaphore_wait_op_concept
+{
+    using executor_type          = Executor;
+    using cancellation_slot_type = associated_cancellation_slot_t< Handler >;
+    using allocator_type         = associated_allocator_t< Handler >;
+
+    allocator_type
+    get_allocator()
+    {
+        return get_associated_allocator(handler_);
+    }
+
+    cancellation_slot_type
+    get_cancellation_slot()
+    {
+        return get_associated_cancellation_slot(handler_);
+    }
+
+    executor_type
+    get_executor()
+    {
+        return work_guard_.get_executor();
+    }
+
+    static semaphore_wait_op_model *
+    construct(async_semaphore_base *host, Executor e, Handler handler);
+
+    static void
+    destroy(semaphore_wait_op_model *self);
+
+    semaphore_wait_op_model(async_semaphore_base *host,
+                            Executor              e,
+                            Handler               handler)
+    : semaphore_wait_op_concept(host)
+    , work_guard_(std::move(e))
+    , handler_(std::move(handler))
+    {
+    }
+
+    virtual void
+    complete(error_code ec) override
+    {
+        auto e = get_executor();
+        auto h = std::move(handler_);
+        destroy(this);
+        post(e, experimental::append(std::move(h), ec));
+    }
+
+    executor_work_guard< Executor > work_guard_;
+    Handler                         handler_;
+};
+
+template < class Executor, class Handler >
+auto
+semaphore_wait_op_model< Executor, Handler >::construct(
+    async_semaphore_base *host,
+    Executor              e,
+    Handler               handler) -> semaphore_wait_op_model *
+{
+    auto halloc = get_associated_allocator(handler);
+    auto alloc  = typename std::allocator_traits< decltype(halloc) >::
+        template rebind_alloc< semaphore_wait_op_model >(halloc);
+    auto traits = std::allocator_traits< decltype(alloc) >();
+    auto pmem   = traits.allocate(alloc, sizeof(semaphore_wait_op_model));
+    try
+    {
+        return std::construct_at(static_cast< semaphore_wait_op_model * >(pmem),
+                                 host,
+                                 std::move(e),
+                                 std::move(handler));
+    }
+    catch (...)
+    {
+        traits.deallocate(alloc, pmem, sizeof(semaphore_wait_op_model));
+        throw;
+    }
+}
+
+template < class Executor, class Handler >
+auto
+semaphore_wait_op_model< Executor, Handler >::destroy(
+    semaphore_wait_op_model *self) -> void
+{
+    auto halloc = self->get_allocator();
+    auto alloc  = typename std::allocator_traits< decltype(halloc) >::
+        template rebind_alloc< semaphore_wait_op_model >(halloc);
+    std::destroy_at(self);
+    auto traits = std::allocator_traits< decltype(alloc) >();
+    traits.deallocate(alloc, self, sizeof(semaphore_wait_op_model));
+}
+
+template < class Executor >
+struct basic_async_semaphore : async_semaphore_base
 {
     using executor_type = Executor;
 
@@ -127,11 +319,9 @@ struct basic_async_semaphore
     };
 
     basic_async_semaphore(executor_type exec, int initial_count = 1)
-    : exec_(std::move(exec))
-    , waiters_()
-    , count_(initial_count)
+    : async_semaphore_base(initial_count)
+    , exec_(std::move(exec))
     {
-        assert(count_ >= 0);
     }
 
     executor_type const &
@@ -140,113 +330,44 @@ struct basic_async_semaphore
         return exec_;
     }
 
-    bool
-    try_acquire()
-    {
-        bool acquired = false;
-        if (count_ > 0)
-        {
-            --count_;
-            acquired = true;
-        }
-        return acquired;
-    }
-
-    template < ASIO_COMPLETION_TOKEN_FOR(void()) CompletionHandler
-                   ASIO_DEFAULT_COMPLETION_TOKEN_TYPE(executor_type) >
-    ASIO_INITFN_RESULT_TYPE(CompletionHandler, void())
+    template < ASIO_COMPLETION_TOKEN_FOR(void(std::error_code))
+                   CompletionHandler ASIO_DEFAULT_COMPLETION_TOKEN_TYPE(
+                       executor_type) >
+    ASIO_INITFN_RESULT_TYPE(CompletionHandler, void(std::error_code))
     async_acquire(
         CompletionHandler &&token ASIO_DEFAULT_COMPLETION_TOKEN(executor_type))
     {
-        return async_initiate< CompletionHandler, void() >(
+        return async_initiate< CompletionHandler, void(std::error_code) >(
             [this]< class Handler >(Handler &&handler)
             {
-                if (count_ > 0)
+                auto e = get_associated_executor(handler, get_executor());
+                if (count())
                 {
-                    --count_;
-                    auto e = get_associated_executor(handler, get_executor());
-                    post(std::move(e), std::forward< Handler >(handler));
+                    post(std::move(e),
+                         experimental::append(std::forward< Handler >(handler),
+                                              std::error_code()));
                     return;
                 }
+
                 using handler_type = std::decay_t< Handler >;
-                using model_type   = wait_op_model< handler_type >;
-                auto halloc        = get_associated_allocator(handler);
-                auto alloc =
-                    typename std::allocator_traits< decltype(halloc) >::
-                        template rebind_alloc< model_type >(halloc);
-                auto traits = std::allocator_traits< decltype(alloc) >();
-                auto pmem   = traits.allocate(alloc, sizeof(model_type));
+                using model_type =
+                    semaphore_wait_op_model< decltype(e), handler_type >;
+                model_type *model = model_type ::construct(
+                    this, std::move(e), std::forward< Handler >(handler));
                 try
                 {
-                    auto pop = traits.construct(
-                        alloc, pmem, std::forward< Handler >(handler));
-                    try
-                    {
-                        waiters_.push(pop);
-                    }
-                    catch (...)
-                    {
-                        traits.destroy(alloc, pop);
-                        throw;
-                    }
+                    add_waiter(model);
                 }
                 catch (...)
                 {
-                    traits.deallocate(pmem);
+                    model_type::destroy(model);
                     throw;
                 }
             },
             token);
     }
 
-    void
-    release()
-    {
-        count_ += 1;
-        // release pending operations
-    }
-
-    template < class Handler >
-    struct wait_op_model : detail::semaphore_wait_op_concept
-    {
-        using executor_type = associated_executor_t< Handler >;
-        using cancellation_slot_type =
-            associated_cancellation_slot_t< Handler >;
-        using allocator_type = associated_allocator_t< Handler >;
-
-        allocator_type
-        get_allocator()
-        {
-            return get_associated_allocator(handler_);
-        }
-
-        cancellation_slot_type
-        get_cancellation_slot()
-        {
-            return get_associated_cancellation_slot(handler_);
-        }
-
-        executor_type
-        get_executor()
-        {
-            get_associated_cancellation_slot(handler_);
-            return associated_executor(handler_);
-        }
-
-        wait_op_model(basic_async_semaphore *host, Handler handler)
-        : host_(host)
-        , handler_(std::move(handler))
-        {
-        }
-
-        basic_async_semaphore *host_;
-        Handler                handler_;
-    };
-
     executor_type exec_;
-    detail::expanding_circular_buffer< detail::semaphore_wait_op_concept * >
-        waiters_;
-    int count_;
 };
 
 using async_semaphore = basic_async_semaphore<>;
