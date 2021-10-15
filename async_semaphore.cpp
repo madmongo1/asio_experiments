@@ -113,7 +113,7 @@ struct expanding_circular_buffer
 template < class Executor = any_io_executor >
 struct basic_async_semaphore;
 
-struct semaphore_wait_op_concept;
+struct semaphore_wait_op;
 
 struct async_semaphore_base
 {
@@ -134,7 +134,7 @@ struct async_semaphore_base
 
   protected:
     void
-    add_waiter(semaphore_wait_op_concept *waiter);
+    add_waiter(semaphore_wait_op *waiter);
 
     int
     decrement();
@@ -146,13 +146,13 @@ struct async_semaphore_base
     }
 
   private:
-    detail::expanding_circular_buffer< semaphore_wait_op_concept * > waiters_;
-    int                                                              count_;
+    detail::expanding_circular_buffer< semaphore_wait_op * > waiters_;
+    int                                                      count_;
 };
 
-struct semaphore_wait_op_concept
+struct semaphore_wait_op
 {
-    semaphore_wait_op_concept(async_semaphore_base *host)
+    semaphore_wait_op(async_semaphore_base *host)
     : host_(host)
     {
     }
@@ -175,7 +175,7 @@ async_semaphore_base::~async_semaphore_base()
 }
 
 void
-async_semaphore_base::add_waiter(semaphore_wait_op_concept *waiter)
+async_semaphore_base::add_waiter(semaphore_wait_op *waiter)
 {
     waiters_.push(waiter);
 }
@@ -214,7 +214,7 @@ async_semaphore_base::decrement()
 }
 
 template < class Executor, class Handler >
-struct semaphore_wait_op_model : semaphore_wait_op_concept
+struct semaphore_wait_op_model final : semaphore_wait_op
 {
     using executor_type          = Executor;
     using cancellation_slot_type = associated_cancellation_slot_t< Handler >;
@@ -247,7 +247,7 @@ struct semaphore_wait_op_model : semaphore_wait_op_concept
     semaphore_wait_op_model(async_semaphore_base *host,
                             Executor              e,
                             Handler               handler)
-    : semaphore_wait_op_concept(host)
+    : semaphore_wait_op(host)
     , work_guard_(std::move(e))
     , handler_(std::move(handler))
     {
@@ -256,10 +256,10 @@ struct semaphore_wait_op_model : semaphore_wait_op_concept
     virtual void
     complete(error_code ec) override
     {
-        auto e = get_executor();
+        auto g = std::move(work_guard_);
         auto h = std::move(handler_);
         destroy(this);
-        post(e, experimental::append(std::move(h), ec));
+        post(g.get_executor(), experimental::append(std::move(h), ec));
     }
 
     executor_work_guard< Executor > work_guard_;
@@ -343,9 +343,10 @@ struct basic_async_semaphore : async_semaphore_base
                 auto e = get_associated_executor(handler, get_executor());
                 if (count())
                 {
-                    post(std::move(e),
-                         experimental::append(std::forward< Handler >(handler),
-                                              std::error_code()));
+                    (post)(
+                        std::move(e),
+                        (experimental::append)(std::forward< Handler >(handler),
+                                               std::error_code()));
                     return;
                 }
 
