@@ -277,7 +277,7 @@ semaphore_wait_op_model< Executor, Handler >::construct(
     auto alloc  = typename std::allocator_traits< decltype(halloc) >::
         template rebind_alloc< semaphore_wait_op_model >(halloc);
     auto traits = std::allocator_traits< decltype(alloc) >();
-    auto pmem   = traits.allocate(alloc, sizeof(semaphore_wait_op_model));
+    auto pmem   = traits.allocate(alloc, 1);
     try
     {
         return std::construct_at(static_cast< semaphore_wait_op_model * >(pmem),
@@ -287,7 +287,7 @@ semaphore_wait_op_model< Executor, Handler >::construct(
     }
     catch (...)
     {
-        traits.deallocate(alloc, pmem, sizeof(semaphore_wait_op_model));
+        traits.deallocate(alloc, pmem, 1);
         throw;
     }
 }
@@ -302,7 +302,7 @@ semaphore_wait_op_model< Executor, Handler >::destroy(
         template rebind_alloc< semaphore_wait_op_model >(halloc);
     std::destroy_at(self);
     auto traits = std::allocator_traits< decltype(alloc) >();
-    traits.deallocate(alloc, self, sizeof(semaphore_wait_op_model));
+    traits.deallocate(alloc, self, 1);
 }
 
 template < class Executor >
