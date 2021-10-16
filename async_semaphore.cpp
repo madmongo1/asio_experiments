@@ -363,38 +363,42 @@ timeout(std::chrono::milliseconds ms)
 awaitable< void >
 bot(int n, st::async_semaphore &sem, std::chrono::milliseconds deadline)
 {
-    auto ident = "bot " + std::to_string(n) + " : ";
-    std::cout << ident << "approaching semaphore\n";
-    if (!sem.try_acquire())
+    auto say = [ident = "bot " + std::to_string(n) + " : "](auto &&...args)
     {
-        std::cout << ident << "waiting up to " << deadline.count() << "ms\n";
-        auto then  = std::chrono::steady_clock::now();
-        auto which = co_await(sem.async_acquire(as_tuple(use_awaitable)) ||
-                              timeout(deadline));
-        if (which.index() == 1)
+        std::cout << ident;
+        ((std::cout << args), ...);
+    };
+
+    if (say("approaching semaphore\n"); !sem.try_acquire())
+    {
+        say("waiting up to ", deadline.count(), "ms\n");
+        auto then = std::chrono::steady_clock::now();
+        if ((co_await(sem.async_acquire(as_tuple(use_awaitable)) ||
+                      timeout(deadline)))
+                .index() == 1)
         {
-            std::cout << ident << "got bored waiting after " << deadline.count()
-                      << "ms\n";
+            say("got bored waiting after ", deadline.count(), "ms\n");
             co_return;
         }
         else
         {
-            auto delta =
+            say("semaphore acquired after ",
                 std::chrono::duration_cast< std::chrono::milliseconds >(
-                    std::chrono::steady_clock::now() - then);
-            std::cout << "semaphore acquired after " << delta.count() << "ms\n";
+                    std::chrono::steady_clock::now() - then)
+                    .count(),
+                "ms\n");
         }
     }
     else
     {
-        std::cout << ident << "semaphore acquired immediately\n";
+        say("semaphore acquired immediately\n");
     }
 
     co_await co_sleep(500ms);
-    std::cout << ident << "work done\n";
+    say("work done\n");
 
     sem.release();
-    std::cout << ident << "passed semaphore\n";
+    say("passed semaphore\n");
 }
 
 int
@@ -409,7 +413,7 @@ main()
 
     auto random_time = [&eng, &dist]
     { return std::chrono::milliseconds(dist(eng)); };
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 100; i += 2)
         co_spawn(ioc, bot(i, sem, random_time()), detached);
     ioc.run();
 }
