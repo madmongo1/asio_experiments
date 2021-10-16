@@ -10,106 +10,54 @@
 #include <asio.hpp>
 
 #include <asio/experimental/append.hpp>
+#include <asio/experimental/as_tuple.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
 
 #include <iostream>
+#include <random>
 
 namespace asio::experimental
 {
-namespace st
-{
 namespace detail
 {
-template < class T >
-struct expanding_circular_buffer
+struct bilist_node
 {
-    static constexpr std::size_t initial_capacity = 16;
+    bilist_node()
+    : next_(this)
+    , prev_(this)
+    {
+    }
+
+    bilist_node(bilist_node const &) = delete;
+    bilist_node &
+    operator=(bilist_node const &) = delete;
+    ~bilist_node()                 = default;
 
     void
-    push(T p)
+    unlink() noexcept
     {
-        if (size_ == capacity_)
-        {
-            if (!storage_)
-                init();
-            else
-                grow();
-        }
-        size_ += 1;
-        storage_[back_pos_] = p;
-        if (++back_pos_ >= capacity_)
-            back_pos_ -= capacity_;
-    }
-
-    T
-    pop()
-    {
-        assert(size_);
-        auto result = storage_[front_pos_];
-        if (++front_pos_ >= capacity_)
-            front_pos_ -= capacity_;
-        size_ -= 1;
-        return result;
-    }
-
-    std::size_t
-    size() const
-    {
-        return size_;
-    }
-
-  private:
-    void
-    init()
-    {
-        storage_   = std::make_unique< T[] >(initial_capacity);
-        capacity_  = initial_capacity;
-        front_pos_ = 0;
-        back_pos_  = 0;
+        auto p   = prev_;
+        auto n   = next_;
+        n->prev_ = p;
+        p->next_ = n;
     }
 
     void
-    grow()
+    link_before(bilist_node *next)
     {
-        if (capacity_ > std::numeric_limits< std::size_t >::max() / 2)
-            throw std::bad_alloc();
-        auto new_cap     = capacity_ * 2;
-        auto new_storage = std::make_unique< T[] >(new_cap);
-
-        std::size_t size = 0;
-
-        // the front is ahead of the back (split buffer)
-        if (back_pos_ <= front_pos_)
-        {
-            auto first = &new_storage[0];
-            auto last =
-                std::copy(&storage_[front_pos_], &storage_[capacity_], first);
-            last = std::copy(&storage_[0], &storage_[back_pos_], last);
-            size = std::distance(first, last);
-            assert(size == size_);
-        }
-        else
-        {
-            auto first = &new_storage[0];
-            auto last =
-                std::copy(&storage_[front_pos_], &storage_[back_pos_], first);
-            size = std::distance(first, last);
-            assert(size == size_);
-        }
-        storage_   = std::move(new_storage);
-        capacity_  = new_cap;
-        front_pos_ = 0;
-        back_pos_  = size;
+        next_        = next;
+        prev_        = next->prev_;
+        prev_->next_ = this;
+        next->prev_  = this;
     }
 
-    std::size_t            capacity_  = 0;
-    std::size_t            size_      = 0;
-    std::size_t            front_pos_ = 0;
-    std::size_t            back_pos_  = 0;
-    std::unique_ptr< T[] > storage_;
+    bilist_node *next_;
+    bilist_node *prev_;
 };
 
 }   // namespace detail
-
+namespace st
+{
 template < class Executor = any_io_executor >
 struct basic_async_semaphore;
 
@@ -121,9 +69,9 @@ struct async_semaphore_base
     async_semaphore_base(async_semaphore_base const &) = delete;
     async_semaphore_base &
     operator=(async_semaphore_base const &)       = delete;
-    async_semaphore_base(async_semaphore_base &&) = default;
+    async_semaphore_base(async_semaphore_base &&) = delete;
     async_semaphore_base &
-    operator=(async_semaphore_base &&) = default;
+    operator=(async_semaphore_base &&) = delete;
     ~async_semaphore_base();
 
     bool
@@ -146,11 +94,11 @@ struct async_semaphore_base
     }
 
   private:
-    detail::expanding_circular_buffer< semaphore_wait_op * > waiters_;
-    int                                                      count_;
+    detail::bilist_node waiters_;
+    int                 count_;
 };
 
-struct semaphore_wait_op
+struct semaphore_wait_op : detail::bilist_node
 {
     semaphore_wait_op(async_semaphore_base *host)
     : host_(host)
@@ -170,14 +118,20 @@ async_semaphore_base::async_semaphore_base(int initial_count)
 
 async_semaphore_base::~async_semaphore_base()
 {
-    while (waiters_.size())
-        waiters_.pop()->complete(error::operation_aborted);
+    detail::bilist_node *p = &waiters_;
+    while (p->next_ != &waiters_)
+    {
+        detail::bilist_node *current = p;
+        p                            = p->next_;
+        static_cast< semaphore_wait_op * >(current)->complete(
+            error::operation_aborted);
+    }
 }
 
 void
 async_semaphore_base::add_waiter(semaphore_wait_op *waiter)
 {
-    waiters_.push(waiter);
+    waiter->link_before(&waiters_);
 }
 
 void
@@ -186,12 +140,12 @@ async_semaphore_base::release()
     count_ += 1;
 
     // release a pending operations
-    if (!waiters_.size())
+    if (waiters_.next_ == &waiters_)
         return;
 
-    auto next = waiters_.pop();
     decrement();
-    next->complete(std::error_code());
+    static_cast< semaphore_wait_op * >(waiters_.next_)
+        ->complete(std::error_code());
 }
 
 bool
@@ -251,6 +205,15 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     , work_guard_(std::move(e))
     , handler_(std::move(handler))
     {
+        auto slot = get_cancellation_slot();
+        if (slot.is_connected())
+            slot.assign(
+                [this](cancellation_type)
+                {
+                    semaphore_wait_op_model *self = this;
+                    self->get_cancellation_slot().clear();
+                    self->complete(error::operation_aborted);
+                });
     }
 
     virtual void
@@ -258,6 +221,7 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     {
         auto g = std::move(work_guard_);
         auto h = std::move(handler_);
+        unlink();
         destroy(this);
         post(g.get_executor(), experimental::append(std::move(h), ec));
     }
@@ -379,6 +343,7 @@ using async_semaphore = basic_async_semaphore<>;
 using namespace asio;
 using namespace asio::experimental;
 using namespace std::literals;
+using namespace experimental::awaitable_operators;
 
 awaitable< void >
 co_sleep(std::chrono::milliseconds ms)
@@ -389,18 +354,43 @@ co_sleep(std::chrono::milliseconds ms)
 }
 
 awaitable< void >
-bot(int n, st::async_semaphore &sem)
+timeout(std::chrono::milliseconds ms)
+{
+    auto t = steady_timer(co_await this_coro::executor, ms);
+    co_await t.async_wait(as_tuple(use_awaitable));
+}
+
+awaitable< void >
+bot(int n, st::async_semaphore &sem, std::chrono::milliseconds deadline)
 {
     auto ident = "bot " + std::to_string(n) + " : ";
     std::cout << ident << "approaching semaphore\n";
     if (!sem.try_acquire())
     {
-        std::cout << ident << "waiting\n";
-        co_await sem.async_acquire(use_awaitable);
+        std::cout << ident << "waiting up to " << deadline.count() << "ms\n";
+        auto then  = std::chrono::steady_clock::now();
+        auto which = co_await(sem.async_acquire(as_tuple(use_awaitable)) ||
+                              timeout(deadline));
+        if (which.index() == 1)
+        {
+            std::cout << ident << "got bored waiting after " << deadline.count()
+                      << "ms\n";
+            co_return;
+        }
+        else
+        {
+            auto delta =
+                std::chrono::duration_cast< std::chrono::milliseconds >(
+                    std::chrono::steady_clock::now() - then);
+            std::cout << "semaphore acquired after " << delta.count() << "ms\n";
+        }
+    }
+    else
+    {
+        std::cout << ident << "semaphore acquired immediately\n";
     }
 
-    std::cout << ident << "semaphore acquired\n";
-    co_await co_sleep(1s);
+    co_await co_sleep(500ms);
     std::cout << ident << "work done\n";
 
     sem.release();
@@ -410,9 +400,16 @@ bot(int n, st::async_semaphore &sem)
 int
 main()
 {
-    auto ioc = asio::io_context(ASIO_CONCURRENCY_HINT_UNSAFE);
-    auto sem = st::async_semaphore(ioc.get_executor(), 10);
+    auto ioc  = asio::io_context(ASIO_CONCURRENCY_HINT_UNSAFE);
+    auto sem  = st::async_semaphore(ioc.get_executor(), 10);
+    auto rng  = std::random_device();
+    auto ss   = std::seed_seq { rng(), rng(), rng(), rng(), rng() };
+    auto eng  = std::default_random_engine(ss);
+    auto dist = std::uniform_int_distribution< unsigned int >(1000, 10000);
+
+    auto random_time = [&eng, &dist]
+    { return std::chrono::milliseconds(dist(eng)); };
     for (int i = 0; i < 100; ++i)
-        co_spawn(ioc, bot(i, sem), detached);
+        co_spawn(ioc, bot(i, sem, random_time()), detached);
     ioc.run();
 }
