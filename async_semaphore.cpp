@@ -208,11 +208,16 @@ struct semaphore_wait_op_model final : semaphore_wait_op
         auto slot = get_cancellation_slot();
         if (slot.is_connected())
             slot.assign(
-                [this](cancellation_type)
+                [this](cancellation_type type)
                 {
-                    semaphore_wait_op_model *self = this;
-                    self->get_cancellation_slot().clear();
-                    self->complete(error::operation_aborted);
+                    if (!!(type & (cancellation_type::terminal |
+                                   cancellation_type::partial |
+                                   cancellation_type::total)))
+                    {
+                        semaphore_wait_op_model *self = this;
+                        self->get_cancellation_slot().clear();
+                        self->complete(error::operation_aborted);
+                    }
                 });
     }
 
