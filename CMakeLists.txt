@@ -20,6 +20,7 @@ find_package(Threads REQUIRED)
 
 add_library(asio_asio INTERFACE)
 target_include_directories(asio_asio INTERFACE "${asio_SOURCE_DIR}/asio/include")
+target_include_directories(asio_asio INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(asio_asio INTERFACE Threads::Threads)
 add_library(asio::asio ALIAS asio_asio)
 

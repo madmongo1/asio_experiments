@@ -11,161 +11,21 @@
 
 #include <asio/experimental/append.hpp>
 #include <asio/experimental/as_tuple.hpp>
+#include <asio/experimental/async_semaphore.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/experimental/detail/bilist_node.hpp>
 
 #include <iostream>
 #include <random>
 
-namespace asio::experimental
+namespace asio
 {
-namespace detail
-{
-struct bilist_node
-{
-    bilist_node()
-    : next_(this)
-    , prev_(this)
-    {
-    }
-
-    bilist_node(bilist_node const &) = delete;
-    bilist_node &
-    operator=(bilist_node const &) = delete;
-    ~bilist_node()                 = default;
-
-    void
-    unlink() noexcept
-    {
-        auto p   = prev_;
-        auto n   = next_;
-        n->prev_ = p;
-        p->next_ = n;
-    }
-
-    void
-    link_before(bilist_node *next)
-    {
-        next_        = next;
-        prev_        = next->prev_;
-        prev_->next_ = this;
-        next->prev_  = this;
-    }
-
-    bilist_node *next_;
-    bilist_node *prev_;
-};
-
-}   // namespace detail
-namespace st
+namespace experimental
 {
 template < class Executor = any_io_executor >
 struct basic_async_semaphore;
 
 struct semaphore_wait_op;
-
-struct async_semaphore_base
-{
-    async_semaphore_base(int initial_count);
-    async_semaphore_base(async_semaphore_base const &) = delete;
-    async_semaphore_base &
-    operator=(async_semaphore_base const &)       = delete;
-    async_semaphore_base(async_semaphore_base &&) = delete;
-    async_semaphore_base &
-    operator=(async_semaphore_base &&) = delete;
-    ~async_semaphore_base();
-
-    bool
-    try_acquire();
-
-    void
-    release();
-
-  protected:
-    void
-    add_waiter(semaphore_wait_op *waiter);
-
-    int
-    decrement();
-
-    [[nodiscard]] int
-    count() const noexcept
-    {
-        return count_;
-    }
-
-  private:
-    detail::bilist_node waiters_;
-    int                 count_;
-};
-
-struct semaphore_wait_op : detail::bilist_node
-{
-    semaphore_wait_op(async_semaphore_base *host)
-    : host_(host)
-    {
-    }
-
-    virtual void complete(std::error_code) = 0;
-
-    async_semaphore_base *host_;
-};
-
-async_semaphore_base::async_semaphore_base(int initial_count)
-: waiters_()
-, count_(initial_count)
-{
-}
-
-async_semaphore_base::~async_semaphore_base()
-{
-    detail::bilist_node *p = &waiters_;
-    while (p->next_ != &waiters_)
-    {
-        detail::bilist_node *current = p;
-        p                            = p->next_;
-        static_cast< semaphore_wait_op * >(current)->complete(
-            error::operation_aborted);
-    }
-}
-
-void
-async_semaphore_base::add_waiter(semaphore_wait_op *waiter)
-{
-    waiter->link_before(&waiters_);
-}
-
-void
-async_semaphore_base::release()
-{
-    count_ += 1;
-
-    // release a pending operations
-    if (waiters_.next_ == &waiters_)
-        return;
-
-    decrement();
-    static_cast< semaphore_wait_op * >(waiters_.next_)
-        ->complete(std::error_code());
-}
-
-bool
-async_semaphore_base::try_acquire()
-{
-    bool acquired = false;
-    if (count_ > 0)
-    {
-        --count_;
-        acquired = true;
-    }
-    return acquired;
-}
-
-int
-async_semaphore_base::decrement()
-{
-    assert(count_ > 0);
-    return --count_;
-}
 
 template < class Executor, class Handler >
 struct semaphore_wait_op_model final : semaphore_wait_op
@@ -215,7 +75,6 @@ struct semaphore_wait_op_model final : semaphore_wait_op
                                    cancellation_type::total)))
                     {
                         semaphore_wait_op_model *self = this;
-                        self->get_cancellation_slot().clear();
                         self->complete(error::operation_aborted);
                     }
                 });
@@ -224,6 +83,7 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     virtual void
     complete(error_code ec) override
     {
+        get_cancellation_slot().clear();
         auto g = std::move(work_guard_);
         auto h = std::move(handler_);
         unlink();
@@ -231,16 +91,17 @@ struct semaphore_wait_op_model final : semaphore_wait_op
         post(g.get_executor(), experimental::append(std::move(h), ec));
     }
 
+  private:
     executor_work_guard< Executor > work_guard_;
     Handler                         handler_;
 };
 
 template < class Executor, class Handler >
-auto
+semaphore_wait_op_model< Executor, Handler > *
 semaphore_wait_op_model< Executor, Handler >::construct(
     async_semaphore_base *host,
     Executor              e,
-    Handler               handler) -> semaphore_wait_op_model *
+    Handler               handler)
 {
     auto halloc = get_associated_allocator(handler);
     auto alloc  = typename std::allocator_traits< decltype(halloc) >::
@@ -249,10 +110,8 @@ semaphore_wait_op_model< Executor, Handler >::construct(
     auto pmem   = traits.allocate(alloc, 1);
     try
     {
-        return std::construct_at(static_cast< semaphore_wait_op_model * >(pmem),
-                                 host,
-                                 std::move(e),
-                                 std::move(handler));
+        return new (pmem)
+            semaphore_wait_op_model(host, std::move(e), std::move(handler));
     }
     catch (...)
     {
@@ -342,8 +201,8 @@ struct basic_async_semaphore : async_semaphore_base
 
 using async_semaphore = basic_async_semaphore<>;
 
-}   // namespace st
-}   // namespace asio::experimental
+}   // namespace experimental
+}   // namespace asio
 
 using namespace asio;
 using namespace asio::experimental;
@@ -366,7 +225,7 @@ timeout(std::chrono::milliseconds ms)
 }
 
 awaitable< void >
-bot(int n, st::async_semaphore &sem, std::chrono::milliseconds deadline)
+bot(int n, async_semaphore &sem, std::chrono::milliseconds deadline)
 {
     auto say = [ident = "bot " + std::to_string(n) + " : "](auto &&...args)
     {
@@ -410,7 +269,7 @@ int
 main()
 {
     auto ioc  = asio::io_context(ASIO_CONCURRENCY_HINT_UNSAFE);
-    auto sem  = st::async_semaphore(ioc.get_executor(), 10);
+    auto sem  = async_semaphore(ioc.get_executor(), 10);
     auto rng  = std::random_device();
     auto ss   = std::seed_seq { rng(), rng(), rng(), rng(), rng() };
     auto eng  = std::default_random_engine(ss);
