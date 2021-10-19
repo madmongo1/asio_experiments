@@ -11,6 +11,7 @@
 #define ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
 
 #include <asio/experimental/append.hpp>
+#include <asio/post.hpp>
 #include <asioex/detail/semaphore_wait_op_model.hpp>
 
 namespace asioex
