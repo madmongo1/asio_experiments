@@ -30,3 +30,27 @@ foreach(src IN LISTS src_files)
   add_executable("${target_name}" "${src}")
   target_link_libraries("${target_name}" PUBLIC asio::asio)
 endforeach()
+
+
+#
+# test that all headers are self contained
+#
+
+file(GLOB_RECURSE all_headers  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include" CONFIGURE_DEPENDS "include/*.hpp")
+foreach(header_path IN LISTS all_headers)
+  string(REGEX REPLACE "[/\\.]" "__" exename "${header_path}")
+  message(STATUS "${header_path} -> ${exename}")
+  file(CONFIGURE OUTPUT test/self_contained_test.cpp.in
+          CONTENT "asio-test-self_contained-${exename}.cpp"
+          @ONLY)
+  add_executable("asio-test-self_contained-${exename}"
+          EXCLUDE_FROM_ALL
+          "asio-test-self_contained-${exename}.cpp")
+  target_include_directories("asio-test-self_contained-${exename}" PRIVATE include)
+  target_link_libraries("asio-test-self_contained-${exename}" PRIVATE asio::asio)
+  list(APPEND all_self_contained_tests "asio-test-self_contained-${exename}")
+endforeach()
+
+add_custom_target(asio-test-all_self_contained
+        DEPENDS ${all_self_contained_tests}
+        COMMENT "Check all headers are self-contained")

@@ -1,3 +1,20 @@
+//
+// Copyright (c) 2021 Richard Hodges (hodges.r@gmail.com)
+//
+// Distributed under the Boost Software License, Version 1.0. (See accompanying
+// file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+//
+// Official repository: https://github.com/madmongo1/asio_experiments
+//
+
+#ifndef ASIO_EXPERIMENTAL_IMPL_ASYNC_SEMAPHORE_BASE_HPP
+#define ASIO_EXPERIMENTAL_IMPL_ASYNC_SEMAPHORE_BASE_HPP
+
+#include <asio/detail/assert.hpp>
+#include <asio/error.hpp>
+#include <asio/experimental/async_semaphore.hpp>
+#include <asio/experimental/detail/semaphore_wait_op.hpp>
+
 namespace asio
 {
 namespace experimental
@@ -15,15 +32,21 @@ async_semaphore_base::~async_semaphore_base()
     {
         detail::bilist_node *current = p;
         p                            = p->next_;
-        static_cast< semaphore_wait_op * >(current)->complete(
+        static_cast< detail::semaphore_wait_op * >(current)->complete(
             error::operation_aborted);
     }
 }
 
 void
-async_semaphore_base::add_waiter(semaphore_wait_op *waiter)
+async_semaphore_base::add_waiter(detail::semaphore_wait_op *waiter)
 {
     waiter->link_before(&waiters_);
+}
+
+int
+async_semaphore_base::count() const noexcept
+{
+    return count_;
 }
 
 void
@@ -36,7 +59,7 @@ async_semaphore_base::release()
         return;
 
     decrement();
-    static_cast< semaphore_wait_op * >(waiters_.next_)
+    static_cast< detail::semaphore_wait_op * >(waiters_.next_)
         ->complete(std::error_code());
 }
 
@@ -55,9 +78,11 @@ async_semaphore_base::try_acquire()
 int
 async_semaphore_base::decrement()
 {
-    assert(count_ > 0);
+    ASIO_ASSERT(count_ > 0);
     return --count_;
 }
 
 }   // namespace experimental
 }   // namespace asio
+
+#endif
