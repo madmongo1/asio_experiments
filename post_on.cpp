@@ -57,8 +57,8 @@ struct parallel_contexts
         auto op =
             [this]< std::size_t I >(std::integral_constant< std::size_t, I >)
         {
-            auto &context = get< I >(contexts_);
-            auto &thread  = get< I >(threads_);
+            auto &context = std::get< I >(contexts_);
+            auto &thread  = std::get< I >(threads_);
 
             thread = std::jthread(
                 [&context, this]

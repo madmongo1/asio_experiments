@@ -11,9 +11,7 @@
 #include <asio/experimental/deferred.hpp>
 #include <asio/experimental/as_tuple.hpp>
 #include <asio/experimental/parallel_group.hpp>
-#ifdef WIN32
 #include <asio/experimental/awaitable_operators.hpp>
-#endif
 #include <iostream>
 #include <iomanip>
 
