@@ -103,6 +103,6 @@ struct expanding_circular_buffer
     std::unique_ptr< T[] > storage_;
 };
 
-}   // namespace asio::detail
+}   // namespace asioex::detail
 
 #endif   // ASIO_EXPERIMENTS_FILING_CABINET_EXPANDING_CIRCULAR_BUFFER_HPP

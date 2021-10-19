@@ -12,13 +12,11 @@
 
 #include <asio/associated_allocator.hpp>
 #include <asio/associated_cancellation_slot.hpp>
-#include <asio/error_code.hpp>
 #include <asio/executor_work_guard.hpp>
-#include <asio/experimental/detail/semaphore_wait_op.hpp>
+#include <asioex/detail/semaphore_wait_op.hpp>
+#include <asioex/error_code.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 namespace detail
 {
@@ -26,8 +24,8 @@ template < class Executor, class Handler >
 struct semaphore_wait_op_model final : semaphore_wait_op
 {
     using executor_type          = Executor;
-    using cancellation_slot_type = associated_cancellation_slot_t< Handler >;
-    using allocator_type         = associated_allocator_t< Handler >;
+    using cancellation_slot_type = asio::associated_cancellation_slot_t< Handler >;
+    using allocator_type         = asio::associated_allocator_t< Handler >;
 
     allocator_type
     get_allocator()
@@ -61,14 +59,13 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     complete(error_code ec) override;
 
   private:
-    executor_work_guard< Executor > work_guard_;
+    asio::executor_work_guard< Executor > work_guard_;
     Handler                         handler_;
 };
 
 }   // namespace detail
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif
 
-#include <asio/experimental/detail/impl/semaphore_wait_op_model.hpp>
+#include <asioex/detail/impl/semaphore_wait_op_model.hpp>

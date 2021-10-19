@@ -10,12 +10,10 @@
 #ifndef ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP
 #define ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP
 
-#include <asio/experimental/detail/bilist_node.hpp>
-#include <asio/error_code.hpp>
+#include <asioex/detail/bilist_node.hpp>
+#include <asioex/error_code.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 struct async_semaphore_base;
 
@@ -31,9 +29,8 @@ struct semaphore_wait_op : detail::bilist_node
 };
 
 }   // namespace detail
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif
 
-#include <asio/experimental/detail/impl/semaphore_wait_op.hpp>
+#include <asioex/detail/impl/semaphore_wait_op.hpp>

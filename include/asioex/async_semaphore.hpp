@@ -4,12 +4,10 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/detail/config.hpp>
-#include <asio/error_code.hpp>
-#include <asio/experimental/detail/bilist_node.hpp>
+#include <asioex/detail/bilist_node.hpp>
+#include <asioex/error_code.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 namespace detail
 {
@@ -61,7 +59,7 @@ struct async_semaphore_base
     int                 count_;
 };
 
-template < class Executor = any_io_executor >
+template < class Executor = asio::any_io_executor >
 struct basic_async_semaphore : async_semaphore_base
 {
     /// @brief The type of the default executor.
@@ -119,10 +117,9 @@ struct basic_async_semaphore : async_semaphore_base
 
 using async_semaphore = basic_async_semaphore<>;
 
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif
 
-#include <asio/experimental/impl/async_semaphore_base.hpp>
-#include <asio/experimental/impl/basic_async_semaphore.hpp>
+#include <asioex/impl/async_semaphore_base.hpp>
+#include <asioex/impl/basic_async_semaphore.hpp>

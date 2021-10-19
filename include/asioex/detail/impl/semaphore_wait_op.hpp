@@ -10,11 +10,9 @@
 #ifndef ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP
 #define ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP
 
-#include <asio/experimental/detail/semaphore_wait_op.hpp>
+#include <asioex/detail/semaphore_wait_op.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 namespace detail
 {
@@ -23,7 +21,6 @@ semaphore_wait_op::semaphore_wait_op(async_semaphore_base *host)
 {
 }
 }   // namespace detail
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif

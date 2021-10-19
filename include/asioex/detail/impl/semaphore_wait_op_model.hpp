@@ -11,11 +11,9 @@
 #define ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
 
 #include <asio/experimental/append.hpp>
-#include <asio/experimental/detail/semaphore_wait_op_model.hpp>
+#include <asioex/detail/semaphore_wait_op_model.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 namespace detail
 {
@@ -68,14 +66,14 @@ semaphore_wait_op_model< Executor, Handler >::semaphore_wait_op_model(
     auto slot = get_cancellation_slot();
     if (slot.is_connected())
         slot.assign(
-            [this](cancellation_type type)
+            [this](asio::cancellation_type type)
             {
-                if (!!(type &
-                       (cancellation_type::terminal |
-                        cancellation_type::partial | cancellation_type::total)))
+                if (!!(type & (asio::cancellation_type::terminal |
+                               asio::cancellation_type::partial |
+                               asio::cancellation_type::total)))
                 {
                     semaphore_wait_op_model *self = this;
-                    self->complete(error::operation_aborted);
+                    self->complete(asio::error::operation_aborted);
                 }
             });
 }
@@ -89,10 +87,9 @@ semaphore_wait_op_model< Executor, Handler >::complete(error_code ec)
     auto h = std::move(handler_);
     unlink();
     destroy(this);
-    post(g.get_executor(), experimental::append(std::move(h), ec));
+    asio::post(g.get_executor(), asio::experimental::append(std::move(h), ec));
 }
 
 }   // namespace detail
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 #endif

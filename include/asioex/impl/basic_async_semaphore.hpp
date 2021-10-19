@@ -10,13 +10,12 @@
 #ifndef ASIO_EXPERIMENTAL_IMPL_BASIC_ASYNC_SEMAPHORE_HPP
 #define ASIO_EXPERIMENTAL_IMPL_BASIC_ASYNC_SEMAPHORE_HPP
 
-#include <asio/experimental/async_semaphore.hpp>
-#include <asio/experimental/detail/semaphore_wait_op_model.hpp>
+#include <asio/error_code.hpp>
 #include <asio/post.hpp>
+#include <asioex/async_semaphore.hpp>
+#include <asioex/detail/semaphore_wait_op_model.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 template < class Executor >
 basic_async_semaphore< Executor >::basic_async_semaphore(executor_type exec,
@@ -44,9 +43,9 @@ basic_async_semaphore< Executor >::async_acquire(CompletionHandler &&token)
             auto e = get_associated_executor(handler, get_executor());
             if (count())
             {
-                (post)(std::move(e),
-                       (experimental::append)(std::forward< Handler >(handler),
-                                              std::error_code()));
+                asio::post(std::move(e),
+                           asio::experimental::append(
+                               std::forward< Handler >(handler), error_code()));
                 return;
             }
 
@@ -68,7 +67,6 @@ basic_async_semaphore< Executor >::async_acquire(CompletionHandler &&token)
         token);
 }
 
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif

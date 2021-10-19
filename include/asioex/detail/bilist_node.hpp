@@ -3,9 +3,7 @@
 
 #include <asio/detail/config.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 namespace detail
 {
@@ -59,7 +57,6 @@ bilist_node::link_before(bilist_node *next)
 }
 
 }   // namespace detail
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif

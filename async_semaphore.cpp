@@ -11,26 +11,24 @@
 
 #include <asio/experimental/append.hpp>
 #include <asio/experimental/as_tuple.hpp>
-#include <asio/experimental/async_semaphore.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
-#include <asio/experimental/detail/bilist_node.hpp>
-#include <asio/experimental/detail/semaphore_wait_op_model.hpp>
+#include <asioex/async_semaphore.hpp>
 
 #include <iostream>
 #include <random>
 
-namespace asio
+namespace asioex
 {
 namespace experimental
 {
-
 }   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 using namespace asio;
 using namespace asio::experimental;
 using namespace std::literals;
 using namespace experimental::awaitable_operators;
+using namespace asioex;
 
 awaitable< void >
 co_sleep(std::chrono::milliseconds ms)

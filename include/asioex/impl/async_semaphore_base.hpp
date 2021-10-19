@@ -12,12 +12,10 @@
 
 #include <asio/detail/assert.hpp>
 #include <asio/error.hpp>
-#include <asio/experimental/async_semaphore.hpp>
-#include <asio/experimental/detail/semaphore_wait_op.hpp>
+#include <asioex/async_semaphore.hpp>
+#include <asioex/detail/semaphore_wait_op.hpp>
 
-namespace asio
-{
-namespace experimental
+namespace asioex
 {
 async_semaphore_base::async_semaphore_base(int initial_count)
 : waiters_()
@@ -33,7 +31,7 @@ async_semaphore_base::~async_semaphore_base()
         detail::bilist_node *current = p;
         p                            = p->next_;
         static_cast< detail::semaphore_wait_op * >(current)->complete(
-            error::operation_aborted);
+            asio::error::operation_aborted);
     }
 }
 
@@ -82,7 +80,6 @@ async_semaphore_base::decrement()
     return --count_;
 }
 
-}   // namespace experimental
-}   // namespace asio
+}   // namespace asioex
 
 #endif

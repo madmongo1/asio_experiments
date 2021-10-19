@@ -40,8 +40,8 @@ file(GLOB_RECURSE all_headers  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include" CO
 foreach(header_path IN LISTS all_headers)
   string(REGEX REPLACE "[/\\.]" "__" exename "${header_path}")
   message(STATUS "${header_path} -> ${exename}")
-  file(CONFIGURE OUTPUT test/self_contained_test.cpp.in
-          CONTENT "asio-test-self_contained-${exename}.cpp"
+  configure_file(test/self_contained_test.cpp.in
+          "asio-test-self_contained-${exename}.cpp"
           @ONLY)
   add_executable("asio-test-self_contained-${exename}"
           EXCLUDE_FROM_ALL
