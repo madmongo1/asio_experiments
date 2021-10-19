@@ -7,8 +7,8 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
-#ifndef ASIO_EXPERIMENTAL_IMPL_ASYNC_SEMAPHORE_BASE_HPP
-#define ASIO_EXPERIMENTAL_IMPL_ASYNC_SEMAPHORE_BASE_HPP
+#ifndef ASIOEX_IMPL_ASYNC_SEMAPHORE_BASE_HPP
+#define ASIOEX_IMPL_ASYNC_SEMAPHORE_BASE_HPP
 
 #include <asio/detail/assert.hpp>
 #include <asio/error.hpp>

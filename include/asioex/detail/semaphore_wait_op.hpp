@@ -7,8 +7,8 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
-#ifndef ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP
-#define ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP
+#ifndef ASIOEX_DETAIL_SEMAPHORE_WAIT_OP
+#define ASIOEX_DETAIL_SEMAPHORE_WAIT_OP
 
 #include <asioex/detail/bilist_node.hpp>
 #include <asioex/error_code.hpp>

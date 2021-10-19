@@ -7,8 +7,8 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
-#ifndef ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
-#define ASIO_EXPERIMENTAL_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
+#ifndef ASIOEX_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
+#define ASIOEX_DETAIL_IMPL_SEMAPHORE_WAIT_OP_MODEL_HPP
 
 #include <asio/experimental/append.hpp>
 #include <asio/post.hpp>

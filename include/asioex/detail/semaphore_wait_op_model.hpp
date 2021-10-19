@@ -7,8 +7,8 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
-#ifndef ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP_MODEL_HPP
-#define ASIO_EXPERIMENTAL_DETAIL_SEMAPHORE_WAIT_OP_MODEL_HPP
+#ifndef ASIOEX_DETAIL_SEMAPHORE_WAIT_OP_MODEL_HPP
+#define ASIOEX_DETAIL_SEMAPHORE_WAIT_OP_MODEL_HPP
 
 #include <asio/associated_allocator.hpp>
 #include <asio/associated_cancellation_slot.hpp>

@@ -1,5 +1,5 @@
-#ifndef ASIO_EXPERIMENTAL_ASYNC_SEMAPHORE_HPP
-#define ASIO_EXPERIMENTAL_ASYNC_SEMAPHORE_HPP
+#ifndef ASIOEX_ASYNC_SEMAPHORE_HPP
+#define ASIOEX_ASYNC_SEMAPHORE_HPP
 
 #include <asio/any_io_executor.hpp>
 #include <asio/async_result.hpp>
