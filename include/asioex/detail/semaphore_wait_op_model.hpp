@@ -23,9 +23,10 @@ namespace detail
 template < class Executor, class Handler >
 struct semaphore_wait_op_model final : semaphore_wait_op
 {
-    using executor_type          = Executor;
-    using cancellation_slot_type = asio::associated_cancellation_slot_t< Handler >;
-    using allocator_type         = asio::associated_allocator_t< Handler >;
+    using executor_type = Executor;
+    using cancellation_slot_type =
+        asio::associated_cancellation_slot_t< Handler >;
+    using allocator_type = asio::associated_allocator_t< Handler >;
 
     allocator_type
     get_allocator()
@@ -59,8 +60,16 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     complete(error_code ec) override;
 
   private:
+    struct cancellation_handler
+    {
+        semaphore_wait_op_model* self;
+
+        void operator()(asio::cancellation_type type);
+    };
+
+  private:
     asio::executor_work_guard< Executor > work_guard_;
-    Handler                         handler_;
+    Handler                               handler_;
 };
 
 }   // namespace detail
