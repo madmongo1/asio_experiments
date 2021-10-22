@@ -3,6 +3,8 @@
 #define ASIOEX_TICK_STATE_HPP
 
 #include <asio/associated_executor.hpp>
+#include <asio/experimental/append.hpp>
+#include <asio/post.hpp>
 
 #include <type_traits>
 
@@ -49,29 +51,22 @@ struct associated_tick_state< Handler,
         std::decay_t< decltype(std::declval< Handler & >().get_tick_state()) >;
 };
 
-struct terminal_class
+template < class H >
+auto
+get_associated_tick_state(H &h)
+    -> std::enable_if< has_tick_state_v< H >, bool & >
 {
-};
+    return h.get_tick_state();
+}
 
-template < class Derived, class Base = terminal_class, typename = void >
-struct wrap_executor_type : Base
+template < class H >
+auto
+get_associated_tick_state(H &h)
+    -> std::enable_if< !has_tick_state_v< H >, bool const & >
 {
-};
-
-template < class Derived, class Base >
-struct wrap_executor_type<
-    Derived,
-    Base,
-    std::enable_if_t< asio::detail::has_executor_type< Base >::value > > : Base
-{
-    using executor_type = typename Base::executor_type;
-
-    executor_type
-    get_executor()
-    {
-        return Base::get_executor();
-    }
-};
+    static thread_local const bool s = false;
+    return s;
+}
 
 template < class Handler >
 struct handler_enable_tick_state : Handler
@@ -118,6 +113,37 @@ enable_tick_state(Handler handler)
         typename select_tick_state_handler< std::decay_t< Handler > >::type;
 
     return my_handler(std::move(handler));
+}
+
+template < class Handler,
+           std::enable_if_t< has_tick_state_v< Handler > > * = nullptr >
+auto
+notify_tick(Handler &&h) -> decltype(h)
+{
+    auto &s = get_associated_tick_state(h);
+    s       = true;
+    return decltype(h)(h);
+}
+
+template < class Handler,
+           std::enable_if_t< !has_tick_state_v< Handler > > * = nullptr >
+auto
+notify_tick(Handler &&h) -> decltype(h)
+{
+    return decltype(h)(h);
+}
+
+template < class Handler, class... Args >
+void
+invoke_or_post(Handler &&h, Args &&...args)
+{
+    auto &s = asioex::get_associated_tick_state(h);
+    if (s)
+        std::invoke(std::forward< Handler >(h), std::forward< Args >(args)...);
+    else
+        (asio::post)(
+            asio::experimental::append(notify_tick(std::forward< Handler >(h)),
+                                       std::forward< Args >(args)...));
 }
 
 }   // namespace asioex
