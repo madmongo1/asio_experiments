@@ -7,8 +7,6 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
-#include <asio.hpp>
-
 #include <asioex/mt/transfer_latch.hpp>
 #include <asioex/st/transfer_latch.hpp>
 #include <asioex/transaction.hpp>

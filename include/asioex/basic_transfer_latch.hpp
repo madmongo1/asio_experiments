@@ -16,7 +16,8 @@ namespace asioex
 {
 /// @brief A latch that satisfies the concept concepts::transfer_latch.
 ///
-/// An object of this type represents the the ability to lock and commit state for a value transfer.
+/// An object of this type represents the the ability to lock and commit state
+/// for a value transfer.
 /// @tparam Mutex is a type that satisfies concepts::basic_lockable. Common
 ///         models would be std::mutex and null_mutex
 ///
@@ -54,7 +55,12 @@ class basic_transfer_latch
     void
     rollback() noexcept;
 };
+}   // namespace asioex
 
+#include <cassert>
+
+namespace asioex
+{
 template < concepts::basic_lockable Mutex >
 void
 basic_transfer_latch< Mutex >::commit() noexcept
