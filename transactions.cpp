@@ -20,7 +20,6 @@ static_assert(concepts::basic_lockable< null_mutex >);
 static_assert(concepts::transfer_latch< mt::transfer_latch >);
 static_assert(concepts::transfer_latch< st::transfer_latch >);
 
-
 }   // namespace asioex
 
 void
@@ -28,28 +27,19 @@ test2()
 {
     asioex::mt::transfer_latch l1, l2;
 
-    assert(l1.may_commit());
-    assert(l2.may_commit());
-
     {
         auto t1 = asioex::begin_transaction(l1, l2);
+        assert(l1.may_commit());
+        assert(l2.may_commit());
         t1.rollback();
     }
-
-    assert(l1.may_commit());
-    assert(l2.may_commit());
 
     {
         auto t1 = asioex::begin_transaction(l1, l2);
         assert(l1.may_commit());
         assert(l2.may_commit());
         t1.commit();
-        assert(!l1.may_commit());
-        assert(!l2.may_commit());
     }
-
-    assert(!l1.may_commit());
-    assert(!l2.may_commit());
 
     {
         auto t1 = asioex::begin_transaction(l1, l2);
@@ -68,19 +58,15 @@ test1()
 
     {
         auto t1 = asioex::begin_transaction(l1);
+        assert(l1.may_commit());
         t1.rollback();
     }
-
-    assert(l1.may_commit());
 
     {
         auto t1 = asioex::begin_transaction(l1);
         assert(l1.may_commit());
         t1.commit();
-        assert(!l1.may_commit());
     }
-
-    assert(!l1.may_commit());
 
     {
         auto t1 = asioex::begin_transaction(l1);
