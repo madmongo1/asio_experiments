@@ -11,6 +11,7 @@
 
 #include <asio/experimental/as_tuple.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asioex/error.hpp>
 #include <asioex/mt/transfer_latch.hpp>
 #include <asioex/st/transfer_latch.hpp>
 #include <asioex/transaction.hpp>
@@ -82,6 +83,13 @@ test1()
 
 namespace asioex
 {
+template < concepts::transfer_latch Latch, class CompletionToken >
+struct latch_and_completion_token
+{
+    Latch          &latch;
+    CompletionToken token;
+};
+
 template < asioex::concepts::transfer_latch Latch >
 struct atomic_read_op : asio::coroutine
 {
@@ -104,21 +112,29 @@ struct atomic_read_op : asio::coroutine
             yield sock.async_wait(asio::socket_base::wait_type::wait_read,
                                   std::move(self));
 
+            auto trans = begin_transaction(latch);
+            if (!trans.may_commit())
             {
-                auto trans = begin_transaction(latch);
-                if (trans.may_commit())
-                    trans.commit();
-                else
-                    return self.complete(asio::error::timed_out, 0);
+                trans.rollback();
+                return self.complete(error::completion_denied, 0);
             }
-            // at this point we have committed the transaction and ensured that
-            // no-oen else can complete so this part must complete in a timely
-            // manner, but it is save to complete having unlocked the underlying
-            // latch
-            size = sock.read_some(
-                asio::mutable_buffers_1(
-                    buf.data(), (std::min)(sock.available(), buf.size())),
-                ec);
+            if (ec)
+            {
+                trans.commit();
+                return self.complete(ec, size);
+            }
+
+            auto wasblocked = sock.non_blocking();
+            sock.non_blocking(true);
+            size = sock.read_some(buf, ec);
+            sock.non_blocking(wasblocked);
+            if (ec == asio::error::would_block)
+            {
+                ec.clear();
+                trans.rollback();
+                continue;
+            }
+            trans.commit();
             return self.complete(ec, size);
         }
     }
@@ -188,6 +204,12 @@ test_atomic_op()
 
     char buffer[1024];
     auto latch = asioex::st::transfer_latch();
+
+#if 1
+    std::string tx = "Hello";
+    client.write_some(asio::buffer(tx));
+
+#endif
     try
     {
         auto which =
