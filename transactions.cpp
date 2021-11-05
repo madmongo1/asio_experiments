@@ -7,9 +7,16 @@
 // Official repository: https://github.com/madmongo1/asio_experiments
 //
 
+#include <asio.hpp>
+
+#include <asio/experimental/as_tuple.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
 #include <asioex/mt/transfer_latch.hpp>
 #include <asioex/st/transfer_latch.hpp>
 #include <asioex/transaction.hpp>
+
+#include <iostream>
+#include <variant>
 
 namespace asioex
 {
@@ -73,9 +80,144 @@ test1()
     }
 }
 
+namespace asioex
+{
+template < asioex::concepts::transfer_latch Latch >
+struct atomic_read_op : asio::coroutine
+{
+    asio::ip::tcp::socket  &sock;
+    asio::mutable_buffers_1 buf;
+    Latch                  &latch;
+
+    Latch &
+    get_transfer_latch() const
+    {
+        return latch;
+    }
+
+#include <asio/yield.hpp>
+    template < class Self >
+    void operator()(Self &&self, std::error_code ec = {}, std::size_t size = 0)
+    {
+        reenter(this) for (;;)
+        {
+            yield sock.async_wait(asio::socket_base::wait_type::wait_read,
+                                  std::move(self));
+
+            {
+                auto trans = begin_transaction(latch);
+                if (trans.may_commit())
+                    trans.commit();
+                else
+                    return self.complete(asio::error::timed_out, 0);
+            }
+            // at this point we have committed the transaction and ensured that
+            // no-oen else can complete so this part must complete in a timely
+            // manner, but it is save to complete having unlocked the underlying
+            // latch
+            size = sock.read_some(
+                asio::mutable_buffers_1(
+                    buf.data(), (std::min)(sock.available(), buf.size())),
+                ec);
+            return self.complete(ec, size);
+        }
+    }
+#include <asio/unyield.hpp>
+};
+
+template < ASIO_COMPLETION_TOKEN_FOR(void(std::error_code, std::size_t))
+               ReadHandler,
+           asioex::concepts::transfer_latch Latch >
+ASIO_INITFN_RESULT_TYPE(ReadHandler, void(std::error_code, std::size_t))
+async_atomic_read_some(asio::ip::tcp::socket  &sock,
+                       asio::mutable_buffers_1 buf,
+                       Latch                  &latch,
+                       ReadHandler           &&token)
+{
+    return asio::async_compose< ReadHandler,
+                                void(std::error_code, std::size_t) >(
+        atomic_read_op< Latch > { .sock = sock, .buf = buf, .latch = latch },
+        token,
+        sock);
+}
+
+}   // namespace asioex
+
+asio::awaitable< void >
+connect_pair(asio::ip::tcp::socket &client, asio::ip::tcp::socket &server)
+{
+    using asio::ip::address_v4;
+    using tcp = asio::ip::tcp;
+    using asio::use_awaitable;
+    using namespace asio::experimental::awaitable_operators;
+
+    auto e        = client.get_executor();
+    auto acceptor = tcp::acceptor(e, tcp::endpoint(address_v4::loopback(), 0));
+    co_await(acceptor.async_accept(server, use_awaitable) &&
+             client.async_connect(acceptor.local_endpoint(), use_awaitable));
+
+    co_return;
+}
+
+template < asioex::concepts::transfer_latch Latch >
+asio::awaitable< void >
+trip_latch_after(Latch &latch, std::chrono::nanoseconds delay)
+{
+    auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
+    co_await timer.template async_wait(
+        asio::experimental::as_tuple(asio::use_awaitable));
+    auto trans = asioex::begin_transaction(latch);
+    if (trans.may_commit())
+        trans.commit();
+}
+
+asio::awaitable< void >
+test_atomic_op()
+{
+    using namespace std::literals;
+    using namespace asio::experimental::awaitable_operators;
+    using tcp = asio::ip::tcp;
+    using asio::use_awaitable;
+    using asio::experimental::as_tuple;
+
+    auto e = co_await asio::this_coro::executor;
+
+    auto client = tcp::socket(e);
+    auto server = tcp::socket(e);
+    co_await connect_pair(client, server);
+
+    char buffer[1024];
+    auto latch = asioex::st::transfer_latch();
+    try
+    {
+        auto which =
+            co_await(asioex::async_atomic_read_some(
+                         server, asio::buffer(buffer), latch, use_awaitable) ||
+                     trip_latch_after(latch, 1ms));
+
+        switch (which.index())
+        {
+        case 0:
+            std::cout << __func__ << ": read completed\n";
+            break;
+        case 1:
+            std::cout << __func__ << ": timeout\n";
+            break;
+        }
+    }
+    catch (std::exception &e)
+    {
+        std::cout << __func__ << ": exception: " << e.what() << std::endl;
+    }
+}
+
 int
 main()
 {
     test1();
     test2();
+
+    auto ioc = asio::io_context();
+    asio::co_spawn(ioc, test_atomic_op(), asio::detached);
+    ioc.run();
 }
