@@ -9,15 +9,12 @@
 
 #include <asio.hpp>
 
-#include <asio/experimental/as_tuple.hpp>
-#include <asio/experimental/awaitable_operators.hpp>
-#include <asioex/error.hpp>
 #include <asioex/mt/transfer_latch.hpp>
 #include <asioex/st/transfer_latch.hpp>
 #include <asioex/transaction.hpp>
 
-#include <iostream>
-#include <variant>
+#include <forward_list>
+#include <queue>
 
 namespace asioex
 {
@@ -83,154 +80,277 @@ test1()
 
 namespace asioex
 {
-template < concepts::transfer_latch Latch, class CompletionToken >
-struct latch_and_completion_token
+namespace concepts
 {
-    Latch          &latch;
-    CompletionToken token;
+}   // namespace concepts
+
+namespace concepts
+{
+// clang-format off
+template<class T, class Value>
+concept value_source =
+requires(T& x)
+{
+    { x.take() } -> std::convertible_to<T&&>;
 };
 
-template < asioex::concepts::transfer_latch Latch >
-struct atomic_read_op : asio::coroutine
+template<class T, class Value>
+concept value_target =
+requires(T& x, Value& v)
 {
-    asio::ip::tcp::socket  &sock;
-    asio::mutable_buffers_1 buf;
-    Latch                  &latch;
+    { x.store(std::move(v)) };
+};
+// clang-format on
+}   // namespace concepts
 
-    Latch &
-    get_transfer_latch() const
+template < concepts::transfer_latch Latch, class Source, class Target >
+requires requires(Source s, Target t)
+{
+    { t(s()) };
+}
+bool
+atomic_transfer(Latch &source_latch,
+                Latch &target_latch,
+                Source source,
+                Target target)
+{
+    if (auto t = begin_transaction(source_latch, target_latch); t.may_commit())
     {
-        return latch;
+        // note: we don't need to hold the lock during the store. The commit
+        // only commits the owner of the store, not it contents
+        t.commit();
+        target(source());
+        return true;
+    }
+    return false;
+}
+
+template < concepts::transfer_latch Latch, class Source, class Target >
+requires requires(Source s, Target t)
+{
+    { t(s()) };
+}
+bool
+atomic_transfer(Latch &latch, Source source, Target target)
+{
+    if (auto t = begin_transaction(latch); t.may_commit())
+    {
+        // note: we don't need to hold the lock during the store. The commit
+        // only commits the owner of the store, not it contents
+        t.commit();
+        target(source());
+        return true;
+    }
+    return false;
+}
+
+/// @brief Conditionally delivers a value to a target through a transfer_latch
+/// transaction.
+/// @tparam Value
+/// @tparam Target
+/// @param target_latch
+/// @param val A reference to the value to be moved.
+/// @param target
+/// @post IFF the target_latch was unlatched after being acquired, val will be
+/// in the moved-from state. OTHERWISE, val will be unmodified.
+/// @return true if delivered.
+template < concepts::transfer_latch Latch, class Value, class Target >
+bool
+atomic_deliver(Latch &target_latch, Value &val, Target &target)
+{
+    if (auto t = begin_transaction(target_latch); t.may_commit())
+    {
+        // note: we don't need to hold the lock during the store. The commit
+        // only commits the owner of the store, not it contents
+        t.commit();
+        target.store(std::move(val));
+        return true;
+    }
+    return false;
+}
+
+namespace concepts
+{
+// clang-format off
+template<class Container, class Value>
+concept channel_container_of =
+requires (Container& c, Container const& cc, Value v)
+    {
+        { cc.size() } -> std::convertible_to<std::size_t>;
+        { c.front() } -> std::convertible_to<Value&>;
+        { c.push_back(std::move(v))  };
+        { c.pop_front() };
+    } &&
+    std::move_constructible<Container> &&
+    std::destructible<Container>;
+// clang-format on
+
+}   // namespace concepts
+
+struct void_type
+{
+};
+
+// clang-format off
+struct void_container
+{
+    std::size_t size() const noexcept { return size_; }
+    void_type& front() noexcept { return value_; }
+    void push_back(void_type) { ++size_; };
+    void pop_front() { --size_; };
+  private:
+    std::size_t size_ = 0;
+    [[no_unique_address]] void_type value_;
+};
+// clang-format on
+
+template < concepts::transfer_latch Latch, class Value >
+struct delivery_model_base
+{
+    Latch &latch;
+
+    delivery_model_base(delivery_model_base const &) = delete;
+    delivery_model_base &
+    operator=(delivery_model_base const &) = delete;
+
+    /// Transfer a value after destroying the current object
+    virtual void
+    transfer(Value &&src) = 0;
+
+    /// Fail the transfer after destroying the current object
+    virtual void
+    fail(std::error_code ec) = 0;
+
+    virtual ~delivery_model_base() = default;
+};
+
+template < concepts::transfer_latch Latch >
+struct delivery_model_base< Latch, void >
+{
+    Latch &latch;
+
+    delivery_model_base(delivery_model_base const &) = delete;
+    delivery_model_base &
+    operator=(delivery_model_base const &) = delete;
+
+    /// Transfer a value after destroying the current object
+    virtual void
+    transfer() = 0;
+
+    /// Fail the transfer after destroying the current object
+    virtual void
+    fail(std::error_code ec) = 0;
+
+    virtual ~delivery_model_base() = default;
+};
+
+template < class Value,
+           concepts::channel_container_of< Value > Container,
+           concepts::transfer_latch                Latch >
+struct value_channel_impl
+{
+    value_channel_impl(std::size_t cap)
+    : queue_()
+    , capacity_(cap)
+    {
+        if constexpr (requires { queue_.reserve(capacity_); })
+            queue_.reserve(capacity_);
     }
 
-#include <asio/yield.hpp>
-    template < class Self >
-    void operator()(Self &&self, std::error_code ec = {}, std::size_t size = 0)
+    /// @brief Close the channel to any new deliveries or receives.
+    /// After calling this function, all send operations will wait with
+    /// asio::error::eof. Receive operations will succeed if they can be
+    /// completed immediately due to there being a value in the queue.
+    void
+    close();
+
+    bool
+    try_send(Value &val);
+
+    bool
+    try_send(Value &&val);
+
+  private:
+    std::error_code
+                error_;   //! Set to indicate that the channel has been closed
+    Container   queue_;
+    std::size_t capacity_;
+    std::forward_list< delivery_model_base< Latch, Value > * > deliver_ops_;
+};
+
+template < class Value,
+           concepts::channel_container_of< Value > Container,
+           concepts::transfer_latch                Latch >
+void
+value_channel_impl< Value, Container, Latch >::close()
+{
+    error_ = asio::error::eof;
+}
+
+template < class Value,
+           concepts::channel_container_of< Value > Container,
+           concepts::transfer_latch                Latch >
+bool
+value_channel_impl< Value, Container, Latch >::try_send(Value &&val)
+{
+    return try_send(val);
+}
+
+template < class Value,
+           concepts::channel_container_of< Value > Container,
+           concepts::transfer_latch                Latch >
+bool
+value_channel_impl< Value, Container, Latch >::try_send(Value &val)
+{
+    auto prev    = deliver_ops_.before_begin();
+    auto current = deliver_ops_.begin();
+    while (current != deliver_ops_.end())
     {
-        reenter(this) for (;;)
+        delivery_model_base< Latch, Value > *this_waiter = *current;
+
+        if (auto t = begin_transaction(this_waiter->latch); t.may_commit())
         {
-            yield sock.async_wait(asio::socket_base::wait_type::wait_read,
-                                  std::move(self));
-
-            auto trans = begin_transaction(latch);
-            if (!trans.may_commit())
-            {
-                trans.rollback();
-                return self.complete(error::completion_denied, 0);
-            }
-            if (ec)
-            {
-                trans.commit();
-                return self.complete(ec, size);
-            }
-
-            auto wasblocked = sock.non_blocking();
-            sock.non_blocking(true);
-            size = sock.read_some(buf, ec);
-            sock.non_blocking(wasblocked);
-            if (ec == asio::error::would_block)
-            {
-                ec.clear();
-                trans.rollback();
-                continue;
-            }
-            trans.commit();
-            return self.complete(ec, size);
+            t.commit();
+            deliver_ops_.erase_after(prev);
+            this_waiter->transfer(std::move(val));
+            return true;
         }
+        prev = current++;
     }
-#include <asio/unyield.hpp>
-};
 
-template < ASIO_COMPLETION_TOKEN_FOR(void(std::error_code, std::size_t))
-               ReadHandler,
-           asioex::concepts::transfer_latch Latch >
-ASIO_INITFN_RESULT_TYPE(ReadHandler, void(std::error_code, std::size_t))
-async_atomic_read_some(asio::ip::tcp::socket  &sock,
-                       asio::mutable_buffers_1 buf,
-                       Latch                  &latch,
-                       ReadHandler           &&token)
-{
-    return asio::async_compose< ReadHandler,
-                                void(std::error_code, std::size_t) >(
-        atomic_read_op< Latch > { .sock = sock, .buf = buf, .latch = latch },
-        token,
-        sock);
+    // We were unable to find a pending deliver op, so now we see if we can
+    // store the value
+
+    if (queue_.size() >= capacity_)
+        return false;
+    queue_.push_back(std::move(val));
+    return true;
 }
 
 }   // namespace asioex
 
-asio::awaitable< void >
-connect_pair(asio::ip::tcp::socket &client, asio::ip::tcp::socket &server)
+void
+test_string_channel()
 {
-    using asio::ip::address_v4;
-    using tcp = asio::ip::tcp;
-    using asio::use_awaitable;
-    using namespace asio::experimental::awaitable_operators;
+    asioex::value_channel_impl< std::string,
+                                std::deque< std::string >,
+                                asioex::st::transfer_latch >
+        ch1(1);
 
-    auto e        = client.get_executor();
-    auto acceptor = tcp::acceptor(e, tcp::endpoint(address_v4::loopback(), 0));
-    co_await(acceptor.async_accept(server, use_awaitable) &&
-             client.async_connect(acceptor.local_endpoint(), use_awaitable));
+    auto sent = ch1.try_send("Hello");
+    assert(sent);
+    sent = ch1.try_send("World");
+    assert(!sent);
 
-    co_return;
-}
+    asioex::value_channel_impl< asioex::void_type,
+                                asioex::void_container,
+                                asioex::st::transfer_latch >
+        ch2(1);
 
-template < asioex::concepts::transfer_latch Latch >
-asio::awaitable< void >
-trip_latch_after(Latch &latch, std::chrono::nanoseconds delay)
-{
-    auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
-    co_await timer.template async_wait(
-        asio::experimental::as_tuple(asio::use_awaitable));
-    auto trans = asioex::begin_transaction(latch);
-    if (trans.may_commit())
-        trans.commit();
-}
-
-asio::awaitable< void >
-test_atomic_op()
-{
-    using namespace std::literals;
-    using namespace asio::experimental::awaitable_operators;
-    using tcp = asio::ip::tcp;
-    using asio::use_awaitable;
-    using asio::experimental::as_tuple;
-
-    auto e = co_await asio::this_coro::executor;
-
-    auto client = tcp::socket(e);
-    auto server = tcp::socket(e);
-    co_await connect_pair(client, server);
-
-    char buffer[1024];
-    auto latch = asioex::st::transfer_latch();
-
-#if 1
-    std::string tx = "Hello";
-    client.write_some(asio::buffer(tx));
-
-#endif
-    try
-    {
-        auto which =
-            co_await(asioex::async_atomic_read_some(
-                         server, asio::buffer(buffer), latch, use_awaitable) ||
-                     trip_latch_after(latch, 1ms));
-
-        switch (which.index())
-        {
-        case 0:
-            std::cout << __func__ << ": read completed\n";
-            break;
-        case 1:
-            std::cout << __func__ << ": timeout\n";
-            break;
-        }
-    }
-    catch (std::exception &e)
-    {
-        std::cout << __func__ << ": exception: " << e.what() << std::endl;
-    }
+    sent = ch2.try_send(asioex::void_type());
+    assert(sent);
+    sent = ch2.try_send(asioex::void_type());
+    assert(!sent);
 }
 
 int
@@ -239,7 +359,5 @@ main()
     test1();
     test2();
 
-    auto ioc = asio::io_context();
-    asio::co_spawn(ioc, test_atomic_op(), asio::detached);
-    ioc.run();
+    test_string_channel();
 }
