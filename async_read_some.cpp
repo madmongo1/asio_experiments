@@ -14,6 +14,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
 #include <asioex/async_read_some.hpp>
 #include <asioex/latched_completion.hpp>
 #include <asioex/st/transfer_latch.hpp>
@@ -29,11 +30,16 @@ asio::awaitable< void >
 trip_latch_after(Latch &latch, std::chrono::nanoseconds delay);
 
 asio::awaitable< void >
+write_test_data(asio::ip::tcp::socket &sock);
+
+asio::awaitable< void >
 test_atomic_op()
 {
     using namespace std::literals;
     using namespace asio::experimental::awaitable_operators;
     using tcp = asio::ip::tcp;
+    using asio::co_spawn;
+    using asio::detached;
     using asio::use_awaitable;
     using asio::experimental::as_tuple;
 
@@ -46,33 +52,40 @@ test_atomic_op()
     char buffer[1024];
     auto latch = asioex::st::transfer_latch();
 
-#if 1
-    std::string tx = "Hello";
-    client.write_some(asio::buffer(tx));
+    co_spawn(client.get_executor(), write_test_data(client), detached);
 
-#endif
-    try
+    for (auto done = asioex::error_code (); !done;)
     {
-        auto which =
-            co_await(asioex::async_read_some(
-                         server,
-                         asio::buffer(buffer),
-                         asioex::latched_completion(latch, use_awaitable)) ||
-                     trip_latch_after(latch, 1ms));
-
-        switch (which.index())
+        try
         {
-        case 0:
-            std::cout << __func__ << ": read completed\n";
-            break;
-        case 1:
-            std::cout << __func__ << ": timeout\n";
-            break;
+            latch.reset();
+            auto which = co_await(
+                asioex::async_read_some(server,
+                                        asio::buffer(buffer),
+                                        asioex::latched_completion(
+                                            latch, as_tuple(use_awaitable))) ||
+                trip_latch_after(latch, 100ms));
+
+            switch (which.index())
+            {
+            case 0:
+            {
+                std::cout << __func__ << ": read completed : ";
+                auto [ec, size] = std::get< 0 >(which);
+                done = ec;
+                std::cout << ec.message() << " : "
+                          << std::string_view(buffer, size) << "\n";
+                break;
+            }
+            case 1:
+                std::cout << __func__ << ": timeout\n";
+                break;
+            }
         }
-    }
-    catch (std::exception &e)
-    {
-        std::cout << __func__ << ": exception: " << e.what() << std::endl;
+        catch (std::exception &e)
+        {
+            std::cout << __func__ << ": exception: " << e.what() << std::endl;
+        }
     }
 }
 
@@ -112,4 +125,26 @@ trip_latch_after(Latch &latch, std::chrono::nanoseconds delay)
     auto trans = asioex::begin_transaction(latch);
     if (trans.may_commit())
         trans.commit();
+}
+
+asio::awaitable< void >
+write_test_data(asio::ip::tcp::socket &sock)
+{
+    using tcp = asio::ip::tcp;
+    using asio::use_awaitable;
+    using namespace asio::experimental::awaitable_operators;
+    using namespace std::chrono_literals;
+
+    static const std::string strings[] = { "The", "cat", "sat",
+                                           "on",  "the", "mat" };
+
+    auto t = asio::steady_timer(sock.get_executor());
+    t.expires_after(0ms);
+    for (auto &&s : strings)
+    {
+        co_await t.async_wait(use_awaitable);
+        co_await asio::async_write(sock, asio::buffer(s), use_awaitable);
+        t.expires_after(500ms);
+    }
+    sock.shutdown(asio::socket_base::shutdown_send);
 }

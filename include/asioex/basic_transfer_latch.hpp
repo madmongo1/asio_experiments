@@ -47,6 +47,11 @@ class basic_transfer_latch
     void
     commit() noexcept;
 
+    /// @brief Reset the latch
+    /// @note This method is not thread-safe.
+    void
+    reset();
+
     /// @brief Commit the transfer.
     /// @pre mutex is locked
     /// @pre may_commit() == true
@@ -82,6 +87,13 @@ auto
 basic_transfer_latch< Mutex >::mutex() noexcept -> mutex_type &
 {
     return mutex_;
+}
+
+template < concepts::basic_lockable Mutex >
+void
+basic_transfer_latch< Mutex >::reset()
+{
+    transferred_ = false;
 }
 
 template < concepts::basic_lockable Mutex >
