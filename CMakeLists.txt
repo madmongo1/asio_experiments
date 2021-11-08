@@ -31,6 +31,8 @@ endif ()
 
 find_package(Threads REQUIRED)
 
+add_compile_options("-fconcepts-diagnostics-depth=10")
+
 add_library(asio_asio INTERFACE)
 target_include_directories(asio_asio INTERFACE "${asio_SOURCE_DIR}/asio/include")
 target_include_directories(asio_asio INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
