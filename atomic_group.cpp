@@ -33,8 +33,12 @@ println(Ts &&...ts)
     print(std::forward< Ts >(ts)..., '\n');
 }
 
+template<class Executor, class Handler>
 struct story_op : asio::coroutine
 {
+    asio::executor_work_guard< Executor > wg_;
+    Handler                               handler_;
+
     struct state_t
     {
         state_t(asio::any_io_executor                 exec,
@@ -51,28 +55,40 @@ struct story_op : asio::coroutine
     std::span< std::string const > lines;
     int                            yielded = 0;
 
-    story_op(std::span< std::string const > lines)
-    : pstate()
+    story_op(Executor e, Handler h, std::span< std::string const > lines)
+    : wg_(std::move(e))
+    , handler_(std::move(h))
+    , pstate()
     , lines(lines)
     {
     }
 
+    using allocator_type = asio::associated_allocator_t<Handler>;
+
+    using executor_type = Executor;
+
+    allocator_type
+    get_allocator() const
+    {
+        return asio::get_associated_allocator(handler_);
+    }
+
+    executor_type
+    get_executor() const
+    {
+        return wg_.get_executor();
+    }
+
 #include <asio/yield.hpp>
-    template < class Self >
-    void operator()(Self &&self, asioex::error_code ec = {})
+    void operator()(asioex::error_code ec = {})
     {
         using asio::experimental::append;
         using namespace std::literals;
 
         reenter(this) for (;;)
         {
-            pstate = std::make_unique< state_t >(
-                asio::get_associated_executor(self), lines);
-            if (!pstate)
-            {
-                yield asio::post(append(std::move(self), ec));
-                return self.complete(ec);
-            }
+            if (!allocate_state(ec))
+                return complete(ec);
 
             while (pstate->current != std::end(lines))
             {
@@ -80,38 +96,88 @@ struct story_op : asio::coroutine
                 {
                     pstate->timer.expires_after(500ms);
                     ++yielded;
-                    yield pstate->timer.async_wait(std::move(self));
+                    yield pstate->timer.async_wait(std::move(*this));
                     if (ec)
                         break;
                 }
                 println(*pstate->current++);
             }
 
-            pstate.reset();
-            if (!yielded)
-                yield asio::post(append(std::move(self), ec));
-            return self.complete(ec);
+            return complete(ec);
         }
     }
 #include <asio/unyield.hpp>
+
+    bool
+    allocate_state(asioex::error_code &ec)
+    {
+        try
+        {
+            pstate = std::make_unique< state_t >(wg_.get_executor(), lines);
+            ec.clear();
+        }
+        catch (std::bad_alloc &)
+        {
+            ec = asio::error::no_memory;
+        }
+        catch (std::exception& e)
+        {
+            ec = asio::error::invalid_argument;
+        }
+        return !ec;
+    }    
+
+    void
+    complete(asioex::error_code ec)
+    {
+        using asio::experimental::append;
+
+        pstate.reset();
+
+        if (yielded)
+            return handler_(ec);
+        else
+        {
+            auto e = get_executor();
+            asio::post(e, append(std::move(handler_), ec));
+        }
+    }
+};
+
+struct initiate_story
+{
+    template < class Handler >
+    void
+    operator()(Handler&& handler, std::span< std::string const > lines) const
+    {
+        using exec_type = asio::associated_executor_t<Handler, asio::any_io_executor>;
+        auto exec       = asio::get_associated_executor(handler, asio::any_io_executor());
+        auto op = story_op< exec_type, Handler >(
+            std::move(exec), 
+            std::move(handler), 
+            lines);
+        op();
+    }
 };
 
 template < ASIO_COMPLETION_TOKEN_FOR(void(asioex::error_code))
                CompletionHandler >
-ASIO_INITFN_RESULT_TYPE(CompletionHandler, void(asioex::error_code))
+ASIO_INITFN_AUTO_RESULT_TYPE(CompletionHandler, void(asioex::error_code))
 async_cat_story(CompletionHandler &&token)
 {
     static const std::string lines[] = {
         "The", "cat", "sat", "on", "the", "mat"
     };
 
-    return asio::async_compose< CompletionHandler, void(asioex::error_code) >(
-        story_op(std::span(std::begin(lines), std::end(lines))), token);
+    return asio::async_initiate< CompletionHandler, void(asioex::error_code) >(
+        initiate_story(),
+        token,
+        std::span(std::begin(lines), std::end(lines)));
 }
 
-template < ASIO_COMPLETION_TOKEN_FOR(void(asioex::error_code))
+template < ASIO_COMPLETION_TOKEN_FOR(void(asio::error_code))
                CompletionHandler >
-ASIO_INITFN_RESULT_TYPE(CompletionHandler, void(asioex::error_code))
+ASIO_INITFN_AUTO_RESULT_TYPE(CompletionHandler, void(asio::error_code))
 async_eggs_and_ham_story(CompletionHandler &&token)
 {
     static const std::string lines[] = {
@@ -119,8 +185,12 @@ async_eggs_and_ham_story(CompletionHandler &&token)
         "that Sam-I-am", "Do you like",   "green eggs and ham?"
     };
 
-    return asio::async_compose< CompletionHandler, void(asioex::error_code) >(
-        story_op(std::span(std::begin(lines), std::end(lines))), token);
+    return asio::async_initiate< CompletionHandler, void(asio::error_code) >
+        (
+            initiate_story(), 
+            token,
+            std::span(std::begin(lines), std::end(lines))
+        );
 }
 
 template < class... Jobs >
@@ -143,10 +213,10 @@ main()
     auto ioc = asio::io_context();
     auto tp  = asio::thread_pool();
 
-    auto tok = bind_executor(ioc, deferred);
+//    auto tok = bind_executor(ioc, deferred);
 
     co_spawn(ioc,
-             sequential(async_eggs_and_ham_story(tok), async_cat_story(tok)),
+             sequential(async_eggs_and_ham_story(deferred), async_cat_story(deferred)),
              detached);
     /*
     async_cat_story(asio::bind_executor(
