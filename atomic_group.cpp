@@ -14,6 +14,8 @@
 #include <asioex/error_code.hpp>
 #include <asioex/st/transfer_latch.hpp>
 
+#include <boost/core/demangle.hpp>
+
 #include <iostream>
 #include <memory>
 #include <memory_resource>
@@ -65,11 +67,18 @@ struct latched_initiation
                Initiation    &&initiation,
                InitArgs &&...init_args)
     {
+        println(boost::core::demangle(typeid(latched_initiation).name()),"::", __func__, " : ");
+        println("    initiation: ", boost::core::demangle(typeid(initiation).name()));
+        println("    token     : ", boost::core::demangle(typeid(token).name()));
+        println("    latch     : ", boost::core::demangle(typeid(latch).name()));
+        (println("    init_args : ", boost::core::demangle(typeid(init_args).name())), ...);
         return asio::async_initiate< CompletionToken, Signatures... >(
             std::forward< Initiation >(initiation),
             token,
-// uncomment to cause compile error            latch,
+// uncomment to cause compile error
+//            latch,
             std::forward< InitArgs >(init_args)...);
+
     }
 };
 }   // namespace asioex
@@ -89,12 +98,18 @@ struct async_result<
              asioex::with_latch_t< Latch, InnerToken > my_token,
              InitArgs &&...init_args)
     {
-        return asio::async_initiate< InnerToken, Signatures... >(
+        println(boost::core::demangle(typeid(async_result).name()), "::", __func__, " : ");
+
+        auto x = asio::async_initiate< InnerToken, Signatures... >(
             asioex::latched_initiation< Signatures... > {},
             my_token.token_,
             my_token.latch_,
             std::forward< Initiation >(init),
             std::forward< InitArgs >(init_args)...);
+
+        println("    returns : ", boost::core::demangle(typeid(x).name()));
+
+        return x;
     }
 };
 
@@ -213,10 +228,24 @@ struct story_op : asio::coroutine
 
 struct initiate_story
 {
+    template<class Handler, class...Args>
+    auto operator()(Handler&& handler, Args&&...args) const
+    {
+        println(boost::core::demangle(typeid(*this).name()), "::", __func__, " : ");
+        println("    handler : ", boost::core::demangle(typeid(handler).name()));
+        (println("    args    : ", boost::core::demangle(typeid(args).name())), ...);
+
+        asio::post(asio::experimental::append(std::forward<Handler>(handler), std::error_code(asio::error::service_not_found)));
+    }
+
     template < class Handler >
     void
     operator()(Handler &&handler, std::span< std::string const > lines) const
     {
+        println(boost::core::demangle(typeid(*this).name()), "::", __func__, " : ");
+        println("    handler : ", boost::core::demangle(typeid(handler).name()));
+        println("    lines   : ", boost::core::demangle(typeid(lines).name()));
+
         using exec_type =
             asio::associated_executor_t< Handler, asio::any_io_executor >;
         auto exec =
@@ -232,6 +261,10 @@ struct initiate_story
                Latch                         *latch,
                std::span< std::string const > lines) const
     {
+        println(boost::core::demangle(typeid(*this).name()), "::", __func__, " : ");
+        println("    handler : ", boost::core::demangle(typeid(handler).name()));
+        println("    latch   : ", boost::core::demangle(typeid(latch).name()));
+        println("    lines   : ", boost::core::demangle(typeid(lines).name()));
 
         // for now ignore the latch
 
