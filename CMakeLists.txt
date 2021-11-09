@@ -15,9 +15,16 @@ if (NOT BUILD_TESTING)
 endif ()
 
 set(CMAKE_CXX_STANDARD 20)
-if (MSVC)
-    add_compile_options("/await:strict")
-endif ()
+message(STATUS "Compiler is ${CMAKE_CXX_COMPILER_ID}")
+if (CMAKE_CXX_COMPILER_ID MATCHES "[Cc]lang")
+    if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC") # clang-cl
+        add_compile_options("/await:strict")
+    elseif (CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "GNU") # clang native
+    endif()
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU") # both
+        add_compile_options("-fconcepts-diagnostics-depth=10")
+endif()
+
 include(FetchContent)
 FetchContent_Declare(asio
         GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
@@ -31,19 +38,19 @@ endif ()
 
 find_package(Threads REQUIRED)
 
-add_compile_options("-fconcepts-diagnostics-depth=10")
-
 add_library(asio_asio INTERFACE)
 target_include_directories(asio_asio INTERFACE "${asio_SOURCE_DIR}/asio/include")
 target_include_directories(asio_asio INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(asio_asio INTERFACE Threads::Threads)
 add_library(asio::asio ALIAS asio_asio)
 
+find_package(Boost REQUIRED)
+
 file(GLOB src_files CONFIGURE_DEPENDS "*.cpp")
 foreach (src IN LISTS src_files)
     get_filename_component(target_name "${src}" NAME_WLE)
     add_executable("${target_name}" "${src}")
-    target_link_libraries("${target_name}" PUBLIC asio::asio)
+    target_link_libraries("${target_name}" PUBLIC asio::asio Boost::boost)
 endforeach ()
 
 message(STATUS "BUILD_TESTING=${BUILD_TESTING}")

@@ -59,7 +59,7 @@ struct latched_initiation
                asioex::concepts::transfer_latch Latch,
                class Initiation,
                class... InitArgs >
-    void
+    auto
     operator()(CompletionToken&& token,
                Latch          *latch,
                Initiation    &&initiation,
