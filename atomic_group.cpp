@@ -85,6 +85,20 @@ struct latched_initiation
 
 namespace asio
 {
+
+struct latched_tag
+{
+};
+
+template<typename ... Args, typename Latch>
+auto tag_invoke(latched_tag, asio::detail::initiation_archetype<Args...> && ac, const Latch & ) { return ac;}
+
+template<typename Init, typename Latch>
+auto tag_invoke(latched_tag, Init && init, Latch && latch) -> decltype(std::declval<Init>().with_latch(std::declval<Latch>()))
+{
+    return std::forward<Init>(init).with_latch(std::forward<Latch>(latch));
+}
+
 template < class InnerToken, class... Signatures >
 struct async_result<
     asioex::with_latch_t< asioex::st::transfer_latch, InnerToken >,
@@ -98,18 +112,12 @@ struct async_result<
              asioex::with_latch_t< Latch, InnerToken > my_token,
              InitArgs &&...init_args)
     {
-        println(boost::core::demangle(typeid(async_result).name()), "::", __func__, " : ");
+        auto latched_init = tag_invoke(latched_tag{}, std::forward<Initiation>(init), std::move(my_token.latch_));
 
-        auto x = asio::async_initiate< InnerToken, Signatures... >(
-            asioex::latched_initiation< Signatures... > {},
-            my_token.token_,
-            my_token.latch_,
-            std::forward< Initiation >(init),
-            std::forward< InitArgs >(init_args)...);
-
-        println("    returns : ", boost::core::demangle(typeid(x).name()));
-
-        return x;
+        return async_result<InnerToken, Signatures...>::initiate(
+            std::move(latched_init),
+            std::move(my_token.token_),
+            std::forward<InitArgs>(init_args)...);
     }
 };
 
@@ -226,8 +234,44 @@ struct story_op : asio::coroutine
     }
 };
 
+template<typename Latch>
+struct initiate_story_with_latch
+{
+    Latch latch;
+
+
+    template < class Handler>
+    void
+    operator()(Handler                      &&handler,
+               std::span< std::string const > lines) const
+    {
+        println(boost::core::demangle(typeid(*this).name()), "::", __func__, " : ");
+        println("    handler : ", boost::core::demangle(typeid(handler).name()));
+        println("    latch   : ", boost::core::demangle(typeid(latch).name()));
+        println("    lines   : ", boost::core::demangle(typeid(lines).name()));
+
+        // for now ignore the latch
+
+        using exec_type =
+            asio::associated_executor_t< Handler, asio::any_io_executor >;
+        auto exec =
+            asio::get_associated_executor(handler, asio::any_io_executor());
+        auto op = story_op< exec_type, Handler >(
+            std::move(exec), std::move(handler), lines);
+        op();
+    }
+};
+
 struct initiate_story
 {
+    template<typename Latch>
+    auto with_latch(Latch && l) -> initiate_story_with_latch<std::remove_reference_t<Latch>>
+    {
+        return initiate_story_with_latch<std::remove_reference_t<Latch>>{l};
+    }
+
+
+
     template<class Handler, class...Args>
     auto operator()(Handler&& handler, Args&&...args) const
     {
@@ -255,27 +299,6 @@ struct initiate_story
         op();
     }
 
-    template < class Handler, asioex::concepts::transfer_latch Latch >
-    void
-    operator()(Handler                      &&handler,
-               Latch                         *latch,
-               std::span< std::string const > lines) const
-    {
-        println(boost::core::demangle(typeid(*this).name()), "::", __func__, " : ");
-        println("    handler : ", boost::core::demangle(typeid(handler).name()));
-        println("    latch   : ", boost::core::demangle(typeid(latch).name()));
-        println("    lines   : ", boost::core::demangle(typeid(lines).name()));
-
-        // for now ignore the latch
-
-        using exec_type =
-            asio::associated_executor_t< Handler, asio::any_io_executor >;
-        auto exec =
-            asio::get_associated_executor(handler, asio::any_io_executor());
-        auto op = story_op< exec_type, Handler >(
-            std::move(exec), std::move(handler), lines);
-        op();
-    }
 };
 
 template < ASIO_COMPLETION_TOKEN_FOR(void(asioex::error_code))
