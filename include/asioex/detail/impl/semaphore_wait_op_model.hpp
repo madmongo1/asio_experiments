@@ -25,7 +25,7 @@ semaphore_wait_op_model< Executor, Handler >::construct(
     Executor              e,
     Handler               handler)
 {
-    auto halloc = get_associated_allocator(handler);
+    auto halloc = asio::get_associated_allocator(handler);
     auto alloc  = typename std::allocator_traits< decltype(halloc) >::
         template rebind_alloc< semaphore_wait_op_model >(halloc);
     auto traits = std::allocator_traits< decltype(alloc) >();

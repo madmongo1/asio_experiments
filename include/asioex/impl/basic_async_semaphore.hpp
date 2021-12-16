@@ -37,7 +37,7 @@ template < ASIO_COMPLETION_TOKEN_FOR(void(error_code)) CompletionHandler >
 ASIO_INITFN_RESULT_TYPE(CompletionHandler, void(error_code))
 basic_async_semaphore< Executor >::async_acquire(CompletionHandler &&token)
 {
-    return async_initiate< CompletionHandler, void(std::error_code) >(
+    return asio::async_initiate< CompletionHandler, void(std::error_code) >(
         [this]< class Handler >(Handler &&handler)
         {
             auto e = get_associated_executor(handler, get_executor());

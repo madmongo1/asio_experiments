@@ -31,13 +31,13 @@ struct semaphore_wait_op_model final : semaphore_wait_op
     allocator_type
     get_allocator()
     {
-        return get_associated_allocator(handler_);
+        return asio::get_associated_allocator(handler_);
     }
 
     cancellation_slot_type
     get_cancellation_slot()
     {
-        return get_associated_cancellation_slot(handler_);
+        return asio::get_associated_cancellation_slot(handler_);
     }
 
     executor_type
