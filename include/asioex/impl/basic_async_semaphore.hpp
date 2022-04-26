@@ -26,7 +26,7 @@ basic_async_semaphore< Executor >::basic_async_semaphore(executor_type exec,
 }
 
 template < class Executor >
-basic_async_semaphore< Executor >::executor_type const &
+typename basic_async_semaphore< Executor >::executor_type const &
 basic_async_semaphore< Executor >::get_executor() const
 {
     return exec_;
