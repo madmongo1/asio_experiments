@@ -43,6 +43,7 @@ basic_async_semaphore< Executor >::async_acquire(CompletionHandler &&token)
             auto e = get_associated_executor(handler, get_executor());
             if (count())
             {
+                decrement();
                 asio::post(std::move(e),
                            asio::experimental::append(
                                std::forward< Handler >(handler), error_code()));
