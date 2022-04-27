@@ -29,17 +29,28 @@ struct basic_mutex
     async_lock(CompletionToken &&token ASIO_DEFAULT_COMPLETION_TOKEN(executor_type))
     {
         return asio::async_compose<CompletionToken, void(error_code)>(
-            [&](auto& self, error_code ec = {})
+            [&, did_suspend = false](auto& self, error_code ec = {}) mutable
             {
                 if (ec)
                     std::move(self).complete(ec);
                 else if (!locked_)
                 {
                     locked_ = true;
-                    std::move(self).complete(ec);
+                    if (did_suspend)
+                        std::move(self).complete(ec);
+                    else
+                        asio::post(
+                            get_associated_executor(self, get_executor()),
+                            [s = std::move(self)]() mutable
+                            {
+                                std::move(s).complete(error_code{});
+                            });
                 }
                 else
+                {
+                    did_suspend = true;
                     semaphore_.async_acquire(std::move(self));
+                }
             }, token, *this);
     }
 
