@@ -44,10 +44,8 @@ struct async_semaphore_base
     inline void
     release();
 
-
     ASIO_NODISCARD inline int
-    count() const noexcept;
-
+    value() const noexcept;
 
   protected:
     inline void
@@ -55,6 +53,9 @@ struct async_semaphore_base
 
     inline int
     decrement();
+
+    ASIO_NODISCARD inline int
+    count() const noexcept;
 
   private:
     detail::bilist_node waiters_;

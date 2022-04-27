@@ -86,9 +86,48 @@ bot(int n, async_semaphore &sem, std::chrono::milliseconds deadline)
     say("passed semaphore\n");
 }
 
+#define check_eq(X, Y) \
+    if (X != Y)        \
+    {                  \
+        printf(#X " == " #Y " failed: %d != %d\n", X, Y); \
+        errors++;               \
+    }
+
+int test_value()
+{
+    int errors = 0;
+
+    asio::io_context ioc;
+    async_semaphore sem{ioc.get_executor(), 0};
+
+
+    check_eq(sem.value(), 0);
+
+    sem.release();
+    check_eq(sem.value(), 1);
+    sem.release();
+    check_eq(sem.value(), 2);
+
+    sem.try_acquire();
+    check_eq(sem.value(), 1);
+
+    sem.try_acquire();
+    check_eq(sem.value(), 0);
+
+    sem.async_acquire(asio::detached);
+    check_eq(sem.value(), -1);
+    sem.async_acquire(asio::detached);
+    check_eq(sem.value(), -2);
+
+    return errors;
+}
+
 int
 main()
 {
+    int res = 0;
+    res += test_value();
+
     auto ioc  = asio::io_context(ASIO_CONCURRENCY_HINT_UNSAFE);
     auto sem  = async_semaphore(ioc.get_executor(), 10);
     auto rng  = std::random_device();
@@ -101,4 +140,5 @@ main()
     for (int i = 0; i < 100; i += 2)
         co_spawn(ioc, bot(i, sem, random_time()), detached);
     ioc.run();
+    return res;
 }
