@@ -44,6 +44,14 @@ struct async_semaphore_base
     inline void
     release();
 
+    /// @brief Release the sempahore to achieve a value of zero.
+    /// @returns The amount of releases.
+    /// @details This function immediately releases the semaphore. If there are
+    /// pending async_acquire operations, then the least recent operation will
+    /// commence completion.
+    inline std::size_t
+    release_all();
+
     ASIO_NODISCARD inline int
     value() const noexcept;
 

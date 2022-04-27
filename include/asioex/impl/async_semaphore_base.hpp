@@ -56,6 +56,19 @@ async_semaphore_base::release()
         ->complete(std::error_code());
 }
 
+std::size_t async_semaphore_base::release_all()
+{
+    std::size_t sz = 0u;
+    auto & nx = waiters_.next_;
+    while (nx != &waiters_)
+    {
+        static_cast< detail::semaphore_wait_op * >(nx)->complete(asio::error_code());
+        sz ++ ;
+    }
+    return sz;
+}
+
+
 ASIO_NODISCARD inline int
 async_semaphore_base::value() const noexcept
 {
