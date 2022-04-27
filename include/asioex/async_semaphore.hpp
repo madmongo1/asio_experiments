@@ -85,7 +85,7 @@ struct basic_async_semaphore : async_semaphore_base
     };
 
     /// @brief Construct an async_sempaphore
-    /// @param exec is the default executor associated with the asyn_sempahore
+    /// @param exec is the default executor associated with the async_semaphore
     /// @param initial_count is the initial value of the internal counter.
     /// @pre initial_count >= 0
     /// @pre initial_count <= MAX_INT
