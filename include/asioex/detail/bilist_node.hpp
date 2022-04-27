@@ -24,6 +24,8 @@ struct bilist_node
     inline void
     link_before(bilist_node *next);
 
+    inline std::size_t size() const;
+
     bilist_node *next_;
     bilist_node *prev_;
 };
@@ -54,6 +56,15 @@ bilist_node::link_before(bilist_node *next)
     prev_        = next->prev_;
     prev_->next_ = this;
     next->prev_  = this;
+}
+
+std::size_t
+bilist_node::size() const
+{
+    std::size_t sz = 0;
+    for (auto p = next_; p != this; p = p->next_)
+        sz++;
+    return sz;
 }
 
 }   // namespace detail

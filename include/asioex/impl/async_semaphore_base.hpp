@@ -25,14 +25,9 @@ async_semaphore_base::async_semaphore_base(int initial_count)
 
 async_semaphore_base::~async_semaphore_base()
 {
-    detail::bilist_node *p = &waiters_;
-    while (p->next_ != &waiters_)
-    {
-        detail::bilist_node *current = p;
-        p                            = p->next_;
-        static_cast< detail::semaphore_wait_op * >(current)->complete(
-            asio::error::operation_aborted);
-    }
+    auto & nx = waiters_.next_;
+    while (nx != &waiters_)
+         static_cast< detail::semaphore_wait_op * >(nx)->complete(asio::error::operation_aborted);
 }
 
 void
@@ -59,6 +54,15 @@ async_semaphore_base::release()
     decrement();
     static_cast< detail::semaphore_wait_op * >(waiters_.next_)
         ->complete(std::error_code());
+}
+
+ASIO_NODISCARD inline int
+async_semaphore_base::value() const noexcept
+{
+    if (waiters_.next_ == &waiters_)
+        return count();
+
+    return count() - static_cast<int>(waiters_.size());
 }
 
 bool
