@@ -4,6 +4,7 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/detail/config.hpp>
+#include <asio/experimental/prepend.hpp>
 #include <asioex/detail/bilist_node.hpp>
 #include <asioex/error_code.hpp>
 
@@ -127,6 +128,77 @@ struct basic_async_semaphore : async_semaphore_base
 };
 
 using async_semaphore = basic_async_semaphore<>;
+
+template<typename Executor, typename Op, typename Signature>
+struct synchronized_op;
+
+template<typename Executor, typename Op, typename Err, typename ... Args>
+struct synchronized_op<Executor, Op, void (Err, Args...)>
+{
+    basic_async_semaphore<Executor> & sm;
+    Op op;
+
+    struct semaphore_tag {};
+    struct op_tag {};
+
+    static auto make_error_impl(error_code ec, error_code *)
+    {
+        return ec;
+    }
+
+    static auto make_error_impl(error_code ec, std::exception_ptr *)
+    {
+        return std::make_exception_ptr(std::system_error(ec));
+    }
+
+    static auto make_error(error_code ec)
+    {
+        return make_error_impl(ec, static_cast<Err*>(nullptr));
+    }
+
+    template<typename Self>
+    void operator()(Self && self) // init
+    {
+        if (self.get_cancellation_state().cancelled() != asio::cancellation_type::none)
+            return std::move(self).complete(make_error(asio::error::operation_aborted), Args{}...);
+
+        sm.async_acquire(
+            asio::experimental::prepend(std::move(self), semaphore_tag{}));
+    }
+
+    template<typename Self>
+    void operator()(Self && self, semaphore_tag, error_code ec) // semaphore obtained
+    {
+        std::move(op)(asio::experimental::prepend(std::move(self), op_tag{}));
+    }
+
+    template<typename Self, typename ... Args_>
+    void operator()(Self && self, op_tag, Args_ &&  ... args ) // semaphore obtained
+    {
+        sm.release();
+        std::move(self).complete(std::forward<Args_>(args)...);
+    }
+};
+
+
+
+/// Function to run OPs only when the semaphore can be acquired.
+/// That way an artificial number of processes can run in parallel.
+template<typename Executor, typename Op,
+         ASIO_COMPLETION_TOKEN_FOR(typename decltype(std::declval<Op>()(asio::experimental::detail::deferred_signature_probe{}))::type)
+               CompletionToken
+               ASIO_DEFAULT_COMPLETION_TOKEN_TYPE(Executor)>
+auto synchronized(basic_async_semaphore<Executor> & sm,
+                  Op && op,
+                CompletionToken && completion_token)
+{
+    using sig_t = typename decltype(std::declval<Op>()(asio::experimental::detail::deferred_signature_probe{}))::type;
+
+    using cop = synchronized_op<Executor, std::decay_t<Op>, sig_t>;
+
+    return asio::async_compose<CompletionToken, sig_t>(cop{sm, std::forward<Op>(op)}, completion_token, sm);
+
+}
 
 }   // namespace asioex
 

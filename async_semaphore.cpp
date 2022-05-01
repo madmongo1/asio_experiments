@@ -93,6 +93,14 @@ bot(int n, async_semaphore &sem, std::chrono::milliseconds deadline)
         errors++;               \
     }
 
+
+#define check_le(X, Y) \
+    if (X > Y)        \
+    {                  \
+        printf(#X " <= " #Y " failed: %d <= %d\n", X, Y); \
+        errors++;               \
+    }
+
 int test_value()
 {
     int errors = 0;
@@ -122,11 +130,53 @@ int test_value()
     return errors;
 }
 
+int test_sync()
+{
+    asio::io_context  ioc;
+    int errors = 0;
+    async_semaphore se2{ioc.get_executor(), 3}; //allow at most three in parallel
+
+    std::vector<int> order; // isn't 100% defined!
+
+    static int concurrent = 0;
+
+    auto op =
+        [&](int id, auto && token)
+    {
+        return asio::co_spawn(ioc, [&, id]() -> asio::awaitable<void>
+            {
+                check_le(concurrent, 3);
+                concurrent ++;
+                printf("Entered %d\n", id);
+
+                asio::steady_timer tim{co_await asio::this_coro::executor, std::chrono::milliseconds{10}};
+                co_await tim.async_wait(asio::use_awaitable);
+                printf("Exited %d\n", id);
+                concurrent --;
+            }, std::move(token));
+    };
+
+    synchronized(se2, std::bind(op, 0, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 2, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 4, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 6, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 8, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 10, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 12, std::placeholders::_1), asio::detached);
+    synchronized(se2, std::bind(op, 14, std::placeholders::_1), asio::detached);
+
+    ioc.run();
+
+    return errors;
+
+}
+
 int
 main()
 {
     int res = 0;
     res += test_value();
+    res += test_sync();
 
     auto ioc  = asio::io_context(ASIO_CONCURRENCY_HINT_UNSAFE);
     auto sem  = async_semaphore(ioc.get_executor(), 10);
@@ -139,6 +189,10 @@ main()
     { return std::chrono::milliseconds(dist(eng)); };
     for (int i = 0; i < 100; i += 2)
         co_spawn(ioc, bot(i, sem, random_time()), detached);
+
+
     ioc.run();
+
+
     return res;
 }
