@@ -2,6 +2,7 @@
 #define ASIOEX_DETAIL_BILIST_NODE_HPP
 
 #include <asio/detail/config.hpp>
+#include <cstddef>
 
 namespace asioex
 {

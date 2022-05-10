@@ -1,2 +1,6 @@
 # asio_experiments
-Experiements with Asio
+Mad science Experiments with Asio
+
+This repo contains some very, very experimental features to be used with asio.
+
+
