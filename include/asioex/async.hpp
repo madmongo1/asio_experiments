@@ -206,14 +206,13 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
         asio::associated_allocator_t<std::decay_t<Token>>, compose_tag<Sigs...>, Token, Args...>,
     compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs> ...
 {
-    using compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs> ::return_value ...;
-    using result_type = std::variant<
-        typename compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs>
-            ::tuple_type ...>;
+    using my_type = compose_promise<Return, compose_tag<Sigs...>, Token, Args...>;
+    using compose_promise_base<my_type, Sigs> ::return_value ...;
+    using result_type = std::variant<typename compose_promise_base<my_type, Sigs>::tuple_type ...>;
 
     using token_type = std::decay_t<Token>;
 
-    result_type result_;
+    std::optional<result_type> result_;
 
     token_type token;
     using allocator_type = asio::associated_allocator_t<token_type>;
@@ -231,8 +230,6 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     executor_type executor_;
     bool did_suspend = false;
 
-    compose_promise(const compose_promise & ) =delete;
-    // TODO Pick the executor from one of the args similar to compose
     compose_promise(Args & ... args, Token & tk, compose_tag<Sigs...>)
         : token(tk), executor_(
           asio::prefer(
@@ -243,7 +240,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
 
     ~compose_promise()
     {
-        if (completion)
+        if (completion && result_)
             std::visit(
                 [this](auto & tup)
                 {
@@ -257,9 +254,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
                         asio::dispatch(executor_, std::move(cpl));
                     else
                         asio::post(executor_, std::move(cpl));
-
-
-                }, result_);
+                }, *result_);
     }
 
     constexpr static std::suspend_never initial_suspend() noexcept { return {}; }
@@ -484,7 +479,12 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
 
     void unhandled_exception()
     {
-        throw ;
+        // mangle it onto the executor so the coro dies safely
+        asio::post(executor_,
+                  [ex = std::current_exception()]
+                  {
+                      std::rethrow_exception(ex);
+                  });
     }
 
     // TODO implement for overloads
@@ -500,6 +500,7 @@ struct awaitable_compose_promise<Return, Executor, compose_tag<void(Args_...)>, 
     :  std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type
 {
     using base_type = typename std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type;
+
     void return_value_impl(asio::error_code ec, Return && result)
     {
         if (ec)
@@ -515,11 +516,6 @@ struct awaitable_compose_promise<Return, Executor, compose_tag<void(Args_...)>, 
             this->base_type::return_value(std::move(result));
     }
 
-    void return_value_impl(Return && result)
-    {
-        this->base_type::return_value(std::move(result));
-    }
-
     auto return_value(std::tuple<Args_ ...> result)
     {
         if constexpr (std::is_same_v<Return, std::tuple<Args_...>>)
@@ -532,9 +528,61 @@ struct awaitable_compose_promise<Return, Executor, compose_tag<void(Args_...)>, 
                 }, std::move(result));
     }
 
-    void unhandled_exception() { throw ; }
+    void unhandled_exception()
+    {
+        throw ;
+    }
 };
 
+struct void_t {};
+
+template<typename Executor, typename ... Args_, typename Token, typename ... Args>
+struct awaitable_compose_promise<void, Executor, compose_tag<void(Args_...)>, Token, Args...>
+    :  std::coroutine_traits<asio::awaitable<void_t, Executor>>::promise_type
+{
+
+
+    using base_type = typename std::coroutine_traits<asio::awaitable<void_t, Executor>>::promise_type;
+
+    asio::awaitable<void, Executor> get_return_object() noexcept
+    {
+        co_await base_type::get_return_object();
+    };
+
+
+    void return_value_impl(asio::error_code ec)
+    {
+        if (ec)
+            this->set_error(ec);
+        else
+            this->base_type::return_void();
+    }
+    template<typename = void>
+    void return_value_impl(std::exception_ptr e)
+    {
+        if (e)
+            this->set_except(e);
+        else
+            this->base_type::return_value();
+    }
+
+    auto return_value(std::tuple<Args_ ...> result)
+    {
+        if constexpr (sizeof...(Args_))
+            this->base_type::return_void();
+        else
+            std::apply(
+                [this](auto ... args)
+                {
+                    return_value_impl(std::move(args)...);
+                }, std::move(result));
+    }
+
+    void unhandled_exception()
+    {
+        throw ;
+    }
+};
 
 
 }

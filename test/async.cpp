@@ -28,11 +28,23 @@ auto async_wait(asio::steady_timer &tim,
 {
     const auto tk = asioex::compose_token(tk_);
     tim.expires_after(ms);
-    printf("Entered\n");
     auto [ec] = co_await tim.async_wait(tk);
-    printf("Waited %s\n", ec.message().c_str());
-    assert(tim.get_executor() == co_await asio::this_coro::executor);
     co_return {asio::error::host_not_found_try_again, 42};
+}
+
+
+template<typename CompletionToken>
+auto async_wait_none(asio::steady_timer &tim,
+           std::chrono::milliseconds ms,
+           CompletionToken && tk_,
+           asioex::compose_tag<void(std::error_code)> = {})
+    -> typename asio::async_result<std::decay_t<CompletionToken>,
+                                    void(std::error_code)>::return_type
+{
+    const auto tk = asioex::compose_token(tk_);
+    tim.expires_after(ms);
+    auto [ec] = co_await tim.async_wait(tk);
+    co_return asio::error_code{};
 }
 
 TEST_SUITE_BEGIN("async");
@@ -40,7 +52,7 @@ TEST_SUITE_BEGIN("async");
 TEST_CASE("basics")
 {
     int res;
-    std::error_code ec;
+    std::error_code ec, ec2;
 
     asio::io_context ctx;
     asio::steady_timer tim{ctx};
@@ -55,16 +67,30 @@ TEST_CASE("basics")
                          ec = ec_;
                    }));
 
+    async_wait_none(tim,
+               std::chrono::milliseconds(10),
+               asio::bind_allocator(
+                   alloc,
+                   [&](std::error_code ec_)
+                   {
+                       ec2 = ec_;
+                   }));
 
     auto ff = async_wait(tim,
                         std::chrono::milliseconds(10),
                         asio::use_future);
 
+    auto f2 = async_wait_none(tim,
+                         std::chrono::milliseconds(10),
+                         asio::use_future);
+
     CHECK_NOTHROW(ctx.run());
 
     CHECK_THROWS(ff.get());
+    CHECK_NOTHROW(f2.get());
     CHECK(res == 42);
     CHECK(ec == asio::error::host_not_found_try_again);
+    CHECK(!ec2);
 
 }
 
@@ -168,25 +194,119 @@ TEST_CASE("single op benchmark")
 }
 
 asio::awaitable<void> awaitable_impl()
+try
 {
     asio::steady_timer tim{co_await asio::this_coro::executor};
-    co_await async_wait(tim,
-               std::chrono::milliseconds(10),
-               asio::use_awaitable);
-
-    co_await async_wait(tim,
-                        std::chrono::milliseconds(10),
-                        asio::experimental::as_tuple(asio::use_awaitable));
+    try
+    {
+        co_await async_wait(tim,
+                 std::chrono::milliseconds(10),
+                 asio::use_awaitable);
+        CHECK(false);
+    }
+    catch(asio::system_error  & se)
+    {
+        CHECK(se.code() == asio::error::host_not_found_try_again);
+    }
+    auto ec = std::get<0>(
+                co_await async_wait_none(tim,
+                    std::chrono::milliseconds(10),
+                    asio::experimental::as_tuple(asio::use_awaitable)));
+    CHECK(!ec);
     co_return ;
+}
+catch (...)
+{
+    REQUIRE(false);
 }
 
 
 TEST_CASE("awaitable")
 {
     asio::io_context ctx;
-    asio::co_spawn(ctx, awaitable_impl, asio::detached);
+    asio::co_spawn(ctx, awaitable_impl,
+                   [](std::exception_ptr e)
+                   {
+                       CHECK(!e);
+                   });
     ctx.run();
 }
+
+template<typename Exception, typename CompletionToken>
+auto async_throw(asio::io_context &ctx,
+                 Exception ex,
+                 CompletionToken && tk_,
+                 asioex::compose_tag<void(std::error_code)> = {})
+    -> typename asio::async_result<std::decay_t<CompletionToken>,
+                                    void(std::error_code)>::return_type
+{
+    co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
+    throw ex;
+}
+
+TEST_CASE("exception")
+{
+    asio::io_context ctx;
+    async_throw(ctx, std::runtime_error("RT"), asio::detached);
+    CHECK_THROWS_AS(ctx.run(), std::runtime_error);
+
+
+    auto ex = [](std::exception_ptr e){CHECK(!e);};
+
+    ctx.restart();
+    CHECK_NOTHROW(ctx.run());
+
+    ctx.restart();
+    asio::co_spawn(ctx, async_throw(ctx, std::runtime_error("RT"), asio::use_awaitable), ex);
+    CHECK_THROWS_AS(ctx.run(), std::runtime_error);
+}
+
+template<typename CompletionToken>
+auto async_stop(asio::io_context &ctx,
+                int & pos,
+                bool & done,
+                CompletionToken && tk_,
+                asioex::compose_tag<void(std::error_code)> = {})
+    -> typename asio::async_result<std::decay_t<CompletionToken>,
+                                    void(std::error_code)>::return_type
+{
+    struct foobar
+    {
+        bool & done ;
+        ~foobar()
+        {
+            done = true;
+        }
+    };
+
+    foobar fb{done};
+
+    pos = 1;
+    co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
+    pos = 2;
+    co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
+    pos = 3;
+
+    co_return {};
+}
+
+
+TEST_CASE("run_one")
+{
+    int pos = 0;
+    bool done = false;
+
+    {
+        asio::io_context ctx;
+        async_stop(ctx, pos, done, asio::detached);
+        CHECK(ctx.run_one() == 1u);
+    }
+
+    CHECK(pos == 2);
+    CHECK(done);
+}
+
+
 
 
 TEST_SUITE_END();
