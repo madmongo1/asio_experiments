@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 
 project(asio_experiments)
 
+add_compile_options(-fsanitize=address)
+add_link_options(-fsanitize=address)
+
 set(ASIOEX_DEFAULT_ENABLE_TESTING OFF)
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
     set(ASIOEX_DEFAULT_ENABLE_TESTING ON)

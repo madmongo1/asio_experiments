@@ -6,7 +6,12 @@
 #define ASIO_EXPERIMENTS_ASYNC_HPP
 
 #include <asio/compose.hpp>
+
 #include <asio/experimental/deferred.hpp>
+#include <asio/use_awaitable.hpp>
+#include <asio/experimental/as_tuple.hpp>
+#include <asio/this_coro.hpp>
+
 #include <coroutine>
 #include <boost/mp11/algorithm.hpp>
 #include <boost/mp11/list.hpp>
@@ -14,16 +19,126 @@
 #include <boost/preprocessor/repeat.hpp>
 #include <boost/preprocessor/repeat_2nd.hpp>
 
+namespace asio
+{
+
+template<typename E>
+struct use_awaitable_t;
+
+namespace experimental
+{
+
+template<typename E>
+struct use_coro_t;
+
+}
+
+}
+
 namespace asioex
 {
 
-template<typename ... Signatures>
+template < typename... Signatures >
 struct compose_tag
 {
 };
 
 namespace detail
 {
+
+template < typename T >
+constexpr auto
+compose_token_impl(const T *)
+{
+    return asio::experimental::deferred;
+}
+
+template < typename Executor >
+constexpr auto
+compose_token_impl(const asio::use_awaitable_t< Executor > *)
+{
+    return asio::experimental::as_tuple(asio::use_awaitable_t< Executor >());
+}
+
+template < typename T >
+constexpr auto
+compose_token_impl(const asio::experimental::use_coro_t< T > *)
+{
+    return asio::experimental::as_tuple(asio::experimental::use_coro_t< T >());
+}
+
+template < template < class Token, class... > class Modifier,
+           class Token,
+           class... Ts >
+constexpr auto
+compose_token_impl(
+    const Modifier< Token, Ts... > *,
+    typename asio::constraint< !std::is_void< Token >::value >::type = 0)
+{
+    return compose_token_impl(static_cast< const Token * >(nullptr));
+}
+
+}
+
+template < typename T >
+constexpr auto
+compose_token(const T & val)
+{
+    return detail::compose_token_impl(&val);
+}
+
+namespace detail
+{
+
+template<typename T>
+auto foo(T&&);
+
+template<typename Token>
+auto pick_executor(Token && token)
+{
+    return asio::get_associated_executor(token);
+}
+
+
+template<typename Token,
+         typename First,
+         typename ... IoObjectsOrExecutors>
+auto pick_executor(Token && token,
+                   const First & first,
+                   IoObjectsOrExecutors && ... io_objects_or_executors)
+    -> typename std::enable_if<
+        asio::is_executor<First>::value || asio::execution::is_executor<First>::value
+        ,First >::type
+{
+    return first;
+}
+
+
+template<typename Token,
+           typename First,
+           typename ... IoObjectsOrExecutors>
+auto pick_executor(Token && token,
+                   First & first,
+                   IoObjectsOrExecutors && ... io_objects_or_executors)
+    -> typename First::executor_type
+{
+    return first.get_executor();
+}
+
+
+
+template<typename Token,
+           typename First,
+           typename ... IoObjectsOrExecutors>
+auto pick_executor(Token && token,
+                   First &&,
+                   IoObjectsOrExecutors && ... io_objects_or_executors)
+{
+    return pick_executor(std::forward<Token>(token),
+                         std::forward<IoObjectsOrExecutors>(io_objects_or_executors)...);
+}
+
+
 
 template<typename Derived, typename Signature>
 struct compose_promise_base;
@@ -39,35 +154,99 @@ struct compose_promise_base<Derived, void(Args...)>
     using tuple_type = std::tuple<Args...>;
 };
 
-template<typename Tag, typename Token, typename ... Args>
+template<typename Return, typename Tag, typename Token, typename ... Args>
 struct compose_promise;
 
-
-
-template<typename ...Sigs, typename Token, typename ... Args>
-struct compose_promise<compose_tag<Sigs...>, Token, Args...>
-    : compose_promise_base<compose_promise<compose_tag<Sigs...>, Token, Args...>, Sigs> ...
+template<typename Allocator, typename Tag, typename Token, typename ... Args>
+struct compose_promise_alloc_base
 {
-    using compose_promise_base<compose_promise<compose_tag<Sigs...>, Token, Args...>, Sigs> ::return_value ...;
+    using allocator_type = Allocator;
+    void* operator new(const std::size_t size,
+                 Args & ... args, Token & tk,
+                 Tag)
+    {
+        using alloc_type = typename std::allocator_traits<allocator_type>:: template rebind_alloc<unsigned char>;
+        alloc_type alloc{asio::get_associated_allocator(tk)};
+
+        const auto align_needed = size % alignof(alloc_type);
+        const auto align_offset = align_needed != 0 ? alignof(alloc_type) - align_needed : 0ull;
+        const auto alloc_size = size + sizeof(alloc_type) + align_offset;
+        const auto raw = std::allocator_traits<alloc_type>::allocate(alloc, alloc_size);
+        new (raw + size + align_offset) alloc_type(std::move(alloc));
+
+        return raw;
+    }
+    void operator delete(void * raw_,
+                    std::size_t size)
+    {
+        using alloc_type = typename std::allocator_traits<allocator_type>:: template rebind_alloc<unsigned char>;
+        const auto raw = static_cast<unsigned char *>(raw_);
+
+        const auto align_needed = size % alignof(alloc_type);
+        const auto align_offset = align_needed != 0 ? alignof(alloc_type) - align_needed : 0ull;
+        const auto alloc_size = size + sizeof(alloc_type) + align_offset;
+
+        auto alloc_p = reinterpret_cast<alloc_type*>(raw + size + align_offset);
+        auto alloc = std::move(*alloc_p);
+        alloc_p->~alloc_type();
+
+        std::allocator_traits<alloc_type>::deallocate(alloc, raw, alloc_size);
+    }
+};
+
+template<typename Tag, typename Token, typename ... Args>
+struct compose_promise_alloc_base<std::allocator<void>, Tag, Token, Args...>
+{
+};
+
+template<typename Return, typename ...Sigs, typename Token, typename ... Args>
+struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
+    :
+    compose_promise_alloc_base<
+        asio::associated_allocator_t<std::decay_t<Token>>, compose_tag<Sigs...>, Token, Args...>,
+    compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs> ...
+{
+    using compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs> ::return_value ...;
     using result_type = std::variant<
-        typename compose_promise_base<compose_promise<compose_tag<Sigs...>, Token, Args...>, Sigs>
+        typename compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs>
             ::tuple_type ...>;
 
+    using token_type = std::decay_t<Token>;
+
     result_type result_;
-    Token & token;
+
+    token_type token;
+    using allocator_type = asio::associated_allocator_t<token_type>;
+
+    asio::cancellation_state state{
+        asio::get_associated_cancellation_slot(token),
+        asio::enable_terminal_cancellation()
+    };
+
+    using executor_type =
+        typename asio::prefer_result<
+            decltype(pick_executor(std::declval<Token>(), std::declval<Args>()...)),
+            asio::execution::outstanding_work_t::tracked_t>::type;
+
+    executor_type executor_;
 
     // TODO Pick the executor from one of the args similar to compose
-    compose_promise(Args & ... args, Token & tk, compose_tag<Sigs...>) : token(tk)
+    compose_promise(Args & ... args, Token & tk, compose_tag<Sigs...>)
+        : token(tk), executor_(
+          asio::prefer(
+            pick_executor(token, args...),
+              asio::execution::outstanding_work.tracked))
     {
     }
 
     ~compose_promise()
     {
-        std::visit(
-            [this](auto & tup)
-            {
-                std::apply(complete_, std::move(tup));
-            }, result_);
+        if (completion)
+            std::visit(
+                [this](auto & tup)
+                {
+                    std::apply(std::move(*completion), std::move(tup));
+                }, result_);
     }
 
     constexpr static std::suspend_never initial_suspend() noexcept { return {}; }
@@ -76,19 +255,47 @@ struct compose_promise<compose_tag<Sigs...>, Token, Args...>
     template<typename ... Args_, typename ... Ts>
     auto await_transform(asio::experimental::deferred_async_operation<void(Args_...), Ts...> op)
     {
-
         struct result
         {
             asio::experimental::deferred_async_operation<void(Args_...), Ts...>  op;
+            compose_promise * self;
+            std::tuple<Args_...> res;
+
+            struct completion
+            {
+                compose_promise * self;
+                std::tuple<Args_...> &result;
+                std::unique_ptr<void, coro_delete> coro_handle;
+
+                using cancellation_slot_type = asio::cancellation_slot;
+                cancellation_slot_type get_cancellation_slot() const noexcept
+                {
+                    return self->state.slot();
+                }
+
+                using executor_type = typename compose_promise::executor_type;
+                executor_type get_executor() const noexcept
+                {
+                    return self->executor_;
+                }
+
+                using allocator_type = typename compose_promise::allocator_type;
+                allocator_type get_allocator() const noexcept
+                {
+                    return asio::get_associated_allocator(self->token);
+                }
+
+                void operator()(Args_ ... args)
+                {
+                    result = {std::move(args)...};
+                    std::coroutine_handle<compose_promise>::from_address(coro_handle.release()).resume();
+                }
+            };
+
             bool await_ready() { return false; }
             void await_suspend( std::coroutine_handle<compose_promise> h)
             {
-                std::move(op)(
-                    [this, pp = std::unique_ptr<void, coro_delete>(h.address())](Args_... args) mutable
-                    {
-                        res = {std::move(args)...};
-                        std::coroutine_handle<compose_promise>::from_address(pp.release()).resume();
-                    });
+                std::move(op)(completion{self, res, {h.address(), coro_delete{}}});
             }
 
             std::tuple<Args_...> await_resume()
@@ -96,9 +303,8 @@ struct compose_promise<compose_tag<Sigs...>, Token, Args...>
                 return std::move(res);
             }
 
-            std::tuple<Args_...> res;
         };
-        return result{std::move(op)};
+        return result{std::move(op), this};
     };
 
     struct coro_delete
@@ -110,24 +316,166 @@ struct compose_promise<compose_tag<Sigs...>, Token, Args...>
         }
     };
 
-    auto get_return_object() -> typename asio::async_result<std::decay_t<Token>,
-                                                        void(std::error_code, int)>::return_type
+
+    auto await_transform(asio::this_coro::executor_t) const
+    {
+        struct exec_helper
+        {
+            const executor_type& value;
+
+            constexpr static bool await_ready() noexcept
+            {
+                return true;
+            }
+
+            constexpr static void await_suspend(std::coroutine_handle<>) noexcept
+            {
+            }
+
+            executor_type await_resume() const noexcept
+            {
+                return value;
+            }
+        };
+
+        return exec_helper{executor_};
+    }
+
+    auto await_transform(asio::this_coro::cancellation_state_t) const
+    {
+        struct exec_helper
+        {
+            const asio::cancellation_state& value;
+
+            constexpr static bool await_ready() noexcept
+            {
+                return true;
+            }
+
+            constexpr static void await_suspend(std::coroutine_handle<>) noexcept
+            {
+            }
+
+            asio::cancellation_state await_resume() const noexcept
+            {
+                return value;
+            }
+        };
+        return exec_helper{state};
+    }
+
+    // This await transformation resets the associated cancellation state.
+    auto await_transform(asio::this_coro::reset_cancellation_state_0_t) noexcept
+    {
+        struct result
+        {
+            asio::cancellation_state &state;
+            token_type & token;
+
+            bool await_ready() const noexcept
+            {
+                return true;
+            }
+
+            void await_suspend(std::coroutine_handle<void>) noexcept
+            {
+            }
+
+            auto await_resume() const
+            {
+                state = asio::cancellation_state(asio::get_associated_cancellation_slot(token));
+            }
+        };
+
+        return result{state, token};
+    }
+
+    // This await transformation resets the associated cancellation state.
+    template <typename Filter>
+    auto await_transform(
+        asio::this_coro::reset_cancellation_state_1_t<Filter> reset) noexcept
+    {
+        struct result
+        {
+            asio::cancellation_state & state;
+            Filter filter_;
+            token_type & token;
+
+            bool await_ready() const noexcept
+            {
+                return true;
+            }
+
+            void await_suspend(std::coroutine_handle<void>) noexcept
+            {
+            }
+
+            auto await_resume()
+            {
+                state = asio::cancellation_state(
+                    asio::get_associated_cancellation_slot(token),
+                    ASIO_MOVE_CAST(Filter)(filter_));
+            }
+        };
+
+        return result{state, ASIO_MOVE_CAST(Filter)(reset.filter), token};
+    }
+
+    // This await transformation resets the associated cancellation state.
+    template <typename InFilter, typename OutFilter>
+    auto await_transform(
+        asio::this_coro::reset_cancellation_state_2_t<InFilter, OutFilter> reset)
+        noexcept
+    {
+        struct result
+        {
+            asio::cancellation_state & state;
+            InFilter in_filter_;
+            OutFilter out_filter_;
+            token_type & token;
+
+
+            bool await_ready() const noexcept
+            {
+                return true;
+            }
+
+            void await_suspend(std::coroutine_handle<void>) noexcept
+            {
+            }
+
+            auto await_resume()
+            {
+                state = asio::cancellation_state(
+                    asio::get_associated_cancellation_slot(token),
+                    ASIO_MOVE_CAST(InFilter)(in_filter_),
+                    ASIO_MOVE_CAST(OutFilter)(out_filter_));
+            }
+        };
+
+        return result{state,
+                      ASIO_MOVE_CAST(InFilter)(reset.in_filter),
+                      ASIO_MOVE_CAST(OutFilter)(reset.out_filter),
+                      token};
+    }
+
+    auto get_return_object() -> Return
     {
         return asio::async_initiate<Token, Sigs...>(
             [this](auto tk)
             {
-                complete_ = tk;
+                completion.emplace(std::move(tk));
             }, token);
     }
 
     void unhandled_exception()
     {
-        // TODO: mangle and throw from executor.
-        std::terminate();
+        throw ;
     }
 
     // TODO implement for overloads
-    std::function<Sigs...> complete_;
+    using completion_type = typename asio::async_completion<Token, Sigs...>::completion_handler_type;
+    std::optional<completion_type> completion;
 };
 
 }
@@ -144,7 +492,7 @@ template<typename Return BOOST_PP_REPEAT_2ND(n, ASIOEX_TYPENAME, ), typename Tok
 struct coroutine_traits<Return BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, ), Token, asioex::compose_tag<Sigs...>> \
 {  \
     using promise_type = asioex::detail::compose_promise< \
-                            asioex::compose_tag<Sigs...>, Token         \
+                            Return, asioex::compose_tag<Sigs...>, Token         \
                             BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, )>;     \
 };
 
