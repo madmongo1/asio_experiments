@@ -229,7 +229,9 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
             asio::execution::outstanding_work_t::tracked_t>::type;
 
     executor_type executor_;
+    bool did_suspend = false;
 
+    compose_promise(const compose_promise & ) =delete;
     // TODO Pick the executor from one of the args similar to compose
     compose_promise(Args & ... args, Token & tk, compose_tag<Sigs...>)
         : token(tk), executor_(
@@ -245,7 +247,18 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
             std::visit(
                 [this](auto & tup)
                 {
-                    std::apply(std::move(*completion), std::move(tup));
+                    auto cpl =
+                            [tup = std::move(tup),
+                             completion = std::move(*completion)]() mutable
+                            {
+                                std::apply(std::move(completion), std::move(tup));
+                            };
+                    if (did_suspend)
+                        asio::dispatch(executor_, std::move(cpl));
+                    else
+                        asio::post(executor_, std::move(cpl));
+
+
                 }, result_);
     }
 
@@ -287,6 +300,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
 
                 void operator()(Args_ ... args)
                 {
+                    self->did_suspend  = true;
                     result = {std::move(args)...};
                     std::coroutine_handle<compose_promise>::from_address(coro_handle.release()).resume();
                 }
