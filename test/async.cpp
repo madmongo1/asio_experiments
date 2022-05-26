@@ -8,6 +8,7 @@
 #include "doctest.h"
 
 #include <asio/bind_allocator.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/error.hpp>
 #include <asio/recycling_allocator.hpp>
@@ -100,7 +101,8 @@ auto async_benchmark(asio::io_context &ctx,
 {
     for (std::size_t idx = 0u; idx < 1000000u; idx++)
     {
-        assert(ctx.get_executor().running_in_this_thread());
+        if (idx > 0u)
+            assert(ctx.get_executor().running_in_this_thread());
 
         co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
     }
@@ -161,7 +163,26 @@ TEST_CASE("single op benchmark")
     }
 }
 
+asio::awaitable<void> awaitable_impl()
+{
+    asio::steady_timer tim{co_await asio::this_coro::executor};
+    co_await async_wait(tim,
+               std::chrono::milliseconds(10),
+               asio::use_awaitable);
 
+    co_await async_wait(tim,
+                        std::chrono::milliseconds(10),
+                        asio::experimental::as_tuple(asio::use_awaitable));
+    co_return ;
+}
+
+
+TEST_CASE("awaitable")
+{
+    asio::io_context ctx;
+    asio::co_spawn(ctx, awaitable_impl, asio::detached);
+    ctx.run();
+}
 
 
 TEST_SUITE_END();

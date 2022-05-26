@@ -478,12 +478,64 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     std::optional<completion_type> completion;
 };
 
+template<typename Return, typename Executor, typename Tag, typename Token, typename ... Args>
+struct awaitable_compose_promise;
+
+template<typename Return, typename Executor, typename ... Args_, typename Token, typename ... Args>
+struct awaitable_compose_promise<Return, Executor, compose_tag<void(Args_...)>, Token, Args...>
+    :  std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type
+{
+    using base_type = typename std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type;
+    void return_value_impl(asio::error_code ec, Return && result)
+    {
+        if (ec)
+            this->set_error(ec);
+        else
+            this->base_type::return_value(std::move(result));
+    }
+    void return_value_impl(std::exception_ptr e, Return && result)
+    {
+        if (e)
+            this->set_except(e);
+        else
+            this->base_type::return_value(std::move(result));
+    }
+
+    void return_value_impl(Return && result)
+    {
+        this->base_type::return_value(std::move(result));
+    }
+
+    auto return_value(std::tuple<Args_ ...> result)
+    {
+        if constexpr (std::is_same_v<Return, std::tuple<Args_...>>)
+            this->base_type::return_value(std::forward<Return>(result));
+        else
+            std::apply(
+                [this](auto ... args)
+                {
+                    return_value_impl(std::move(args)...);
+                }, std::move(result));
+    }
+
+    void unhandled_exception() { throw ; }
+};
+
+
+
 }
 
 }
 
 namespace std
 {
+
+// this is hack AF
+template<typename Return, typename Executor, typename Tag, typename Token, typename ... Args>
+struct coroutine_handle<asioex::detail::awaitable_compose_promise<Return, Executor, Tag, Token, Args...>>
+    : coroutine_handle<typename std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type>
+{
+};
 
 #define ASIOEX_TYPENAME(z, n, text) , typename T##n
 #define ASIOEX_SPEC(z, n, text) , T##n
@@ -497,6 +549,19 @@ struct coroutine_traits<Return BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, ), Token, asi
 };
 
 BOOST_PP_REPEAT(24, ASIOEX_TRAIT_DECL, );
+
+#define ASIOEX_AW_TRAIT_DECL(z, n, text) \
+template<typename Return, typename Executor BOOST_PP_REPEAT_2ND(n, ASIOEX_TYPENAME, ), typename Token, typename ... Sigs > \
+struct coroutine_traits<asio::awaitable<Return, Executor> BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, ), Token, asioex::compose_tag<Sigs...>> \
+{  \
+    using promise_type = asioex::detail::awaitable_compose_promise< \
+                            Return, Executor, asioex::compose_tag<Sigs...>, Token \
+                            BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, )>;     \
+};
+
+BOOST_PP_REPEAT(24, ASIOEX_AW_TRAIT_DECL, );
+
+
 
 #undef ASIOEX_TYPENAME
 #undef ASIOEX_SPEC
