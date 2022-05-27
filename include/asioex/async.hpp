@@ -6,6 +6,8 @@
 #define ASIO_EXPERIMENTS_ASYNC_HPP
 
 #include <asio/compose.hpp>
+#include <asio/post.hpp>
+#include <asio/dispatch.hpp>
 
 #include <asio/experimental/deferred.hpp>
 #include <asio/use_awaitable.hpp>
@@ -18,6 +20,9 @@
 
 #include <boost/preprocessor/repeat.hpp>
 #include <boost/preprocessor/repeat_2nd.hpp>
+
+#include <optional>
+#include <variant>
 
 namespace asio
 {
@@ -230,13 +235,23 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     executor_type executor_;
     bool did_suspend = false;
 
-    compose_promise(Args & ... args, Token & tk, compose_tag<Sigs...>)
-        : token(tk), executor_(
+#if defined(__clang__)
+    compose_promise(Args &... args, Token & tk, const compose_tag<Sigs...> &)
+        : token(static_cast<Token>(tk)), executor_(
           asio::prefer(
             pick_executor(token, args...),
               asio::execution::outstanding_work.tracked))
     {
     }
+#else
+    compose_promise(Args &... args, Token && tk, const compose_tag<Sigs...> &)
+    : token(static_cast<Token>(tk)), executor_(
+          asio::prefer(
+              pick_executor(token, args...),
+              asio::execution::outstanding_work.tracked))
+    {
+    }
+#endif
 
     ~compose_promise()
     {

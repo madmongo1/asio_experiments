@@ -137,7 +137,7 @@ auto async_benchmark(asio::io_context &ctx,
         co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
     }
     auto exec = co_await asio::this_coro::executor;
-    co_return {{}, idx};
+    co_return {asio::error_code{}, idx};
 }
 
 
@@ -169,7 +169,7 @@ TEST_CASE("single op benchmark")
         std::printf("Recycling composed op took %lldns\n", std::chrono::nanoseconds(end - start).count());
     }
 
-    SUBCASE("naked async op")
+    SUBCASE("naked composed coro")
     {
         asio::io_context ctx;
         async_benchmark(ctx, detached);
@@ -180,7 +180,7 @@ TEST_CASE("single op benchmark")
         std::printf("Naked         coro op took %lldns\n", std::chrono::nanoseconds(end - start).count());
     }
 
-    SUBCASE("naked async op")
+    SUBCASE("recycling composed coro")
     {
         asio::recycling_allocator<void> alloc;
         asio::io_context ctx;
