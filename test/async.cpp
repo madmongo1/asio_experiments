@@ -180,7 +180,7 @@ TEST_CASE("single op benchmark")
         std::printf("Naked         coro op took %lldns\n", std::chrono::nanoseconds(end - start).count());
     }
 
-    SUBCASE("naked async op")
+    SUBCASE("recycling async op")
     {
         asio::recycling_allocator<void> alloc;
         asio::io_context ctx;

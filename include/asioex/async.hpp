@@ -7,6 +7,8 @@
 
 #include <asio/compose.hpp>
 
+#include <asio/dispatch.hpp>
+#include <asio/post.hpp>
 #include <asio/experimental/deferred.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/experimental/as_tuple.hpp>
@@ -223,9 +225,10 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     };
 
     using executor_type =
-        typename asio::prefer_result<
-            decltype(pick_executor(std::declval<Token>(), std::declval<Args>()...)),
-            asio::execution::outstanding_work_t::tracked_t>::type;
+        std::decay_t<
+            typename asio::prefer_result<
+                decltype(pick_executor(std::declval<Token>(), std::declval<Args>()...)),
+                asio::execution::outstanding_work_t::tracked_t>::type>;
 
     executor_type executor_;
     bool did_suspend = false;
@@ -280,6 +283,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
                 {
                     return self->state.slot();
                 }
+
 
                 using executor_type = typename compose_promise::executor_type;
                 executor_type get_executor() const noexcept
