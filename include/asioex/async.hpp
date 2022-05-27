@@ -204,6 +204,7 @@ struct compose_promise_alloc_base<std::allocator<void>, Tag, Token, Args...>
 {
 };
 
+
 template<typename Return, typename ...Sigs, typename Token, typename ... Args>
 struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     :
@@ -235,7 +236,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
     executor_type executor_;
     bool did_suspend = false;
 
-#if defined(__clang__)
+#if defined(__clang__) || defined(_MSC_FULL_VER)
     compose_promise(Args &... args, Token & tk, const compose_tag<Sigs...> &)
         : token(static_cast<Token>(tk)), executor_(
           asio::prefer(
@@ -570,7 +571,7 @@ struct awaitable_compose_promise<void, Executor, compose_tag<void(Args_...)>, To
         if (ec)
             this->set_error(ec);
         else
-            this->base_type::return_void();
+            this->base_type::return_value(void_t{});
     }
     template<typename = void>
     void return_value_impl(std::exception_ptr e)
@@ -578,13 +579,13 @@ struct awaitable_compose_promise<void, Executor, compose_tag<void(Args_...)>, To
         if (e)
             this->set_except(e);
         else
-            this->base_type::return_value();
+            this->base_type::return_value(void_t{});
     }
 
     auto return_value(std::tuple<Args_ ...> result)
     {
         if constexpr (sizeof...(Args_))
-            this->base_type::return_void();
+            this->base_type::return_value(void_t{});
         else
             std::apply(
                 [this](auto ... args)

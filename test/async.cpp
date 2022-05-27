@@ -242,6 +242,8 @@ auto async_throw(asio::io_context &ctx,
 {
     co_await asio::post(ctx.get_executor(), asioex::compose_token(tk_));
     throw ex;
+
+    co_return {};
 }
 
 TEST_CASE("exception")
