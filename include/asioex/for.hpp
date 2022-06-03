@@ -23,18 +23,19 @@ struct range_from_channel<Executor, Traits, void(Error, T)>
 
 
     template<typename Exec>
-    asio::awaitable<bool> wait(asio::use_awaitable_t<Exec>)
+    asio::awaitable<bool, Exec> wait(asio::use_awaitable_t<Exec> tk)
     {
-        if ((co_await asio::this_coro::cancellation_state).cancelled() != asio::cancellation_type::none
+        const auto st = co_await asio::this_coro::cancellation_state;
+        if (st.cancelled() != asio::cancellation_type::none
                || !chan.is_open())
             co_return false;
 
         if (has_value)
-            init() = co_await chan.async_receive(asio::use_awaitable);
+            init() = co_await chan.async_receive(tk);
         else
         {
             has_value = true;
-            new (&storage_) T(co_await chan.async_receive(asio::use_awaitable));
+            new (&storage_) T(co_await chan.async_receive(tk));
         }
         co_return true;
     }
@@ -70,13 +71,13 @@ struct range_from_coro
     using value_type = typename asio::experimental::coro<Yield, void, Executor>::yield_type;
 
     template<typename Exec>
-    asio::awaitable<bool> wait(asio::use_awaitable_t<Exec>)
+    asio::awaitable<bool, Exec> wait(asio::use_awaitable_t<Exec> tk)
     {
-        if ((co_await asio::this_coro::cancellation_state).cancelled() != asio::cancellation_type::none
-               || !coro.is_open())
+        const auto st = co_await asio::this_coro::cancellation_state;
+        if (st.cancelled() != asio::cancellation_type::none || !coro.is_open())
             co_return false;
 
-        auto value = co_await coro.async_resume(asio::use_awaitable);
+        auto value = co_await coro.async_resume(tk);
         if (!value)
             co_return false;
 

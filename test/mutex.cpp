@@ -8,7 +8,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
-#include "cmake-build-debug/_deps/asio-src/asio/include/asio/detached.hpp"
+#include <asio/detached.hpp>
 
 asio::awaitable<void> main_impl()
 {

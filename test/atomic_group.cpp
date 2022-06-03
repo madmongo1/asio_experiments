@@ -18,7 +18,6 @@
 
 #include <iostream>
 #include <memory>
-#include <memory_resource>
 #include <span>
 
 std::mutex iom;
