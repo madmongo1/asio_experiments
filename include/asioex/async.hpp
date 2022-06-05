@@ -19,96 +19,52 @@
 #include <boost/mp11/list.hpp>
 
 #include <boost/preprocessor/repeat.hpp>
+#include <boost/preprocessor/repetition/repeat_from_to.hpp>
 #include <boost/preprocessor/repeat_2nd.hpp>
+#include <boost/smart_ptr/allocate_unique.hpp>
 
 #include <optional>
 #include <variant>
 
-namespace asio
-{
-
-template<typename E>
-struct use_awaitable_t;
-
-namespace experimental
-{
-
-template<typename E>
-struct use_coro_t;
-
-}
-
-}
 
 namespace asioex
 {
 
-template < typename... Signatures >
-struct compose_tag
+using          async_token_t = asio::experimental::deferred_t;
+constexpr auto async_token   = asio::experimental::deferred;
+
+
+template<typename ... Signatures>
+struct async
 {
+    // helper function used in the macro
+    template<typename Token, typename Initiation, typename ... Args>
+    static auto initiate(Initiation && initiation, Token && token, Args && ... args)
+    {
+        return asio::async_initiate<Token, Signatures...>(
+             std::forward<Initiation>(initiation),
+             std::forward<Token>(token),
+             std::forward<Args>(args)...);
+    }
+
 };
 
-namespace detail
-{
-
-template < typename T >
-constexpr auto
-compose_token_impl(const T *)
-{
-    return asio::experimental::deferred;
-}
-
-template < typename Executor >
-constexpr auto
-compose_token_impl(const asio::use_awaitable_t< Executor > *)
-{
-    return asio::experimental::as_tuple(asio::use_awaitable_t< Executor >());
-}
-
-template < typename T >
-constexpr auto
-compose_token_impl(const asio::experimental::use_coro_t< T > *)
-{
-    return asio::experimental::as_tuple(asio::experimental::use_coro_t< T >());
-}
-
-template < template < class Token, class... > class Modifier,
-           class Token,
-           class... Ts >
-constexpr auto
-compose_token_impl(
-    const Modifier< Token, Ts... > *,
-    typename asio::constraint< !std::is_void< Token >::value >::type = 0)
-{
-    return compose_token_impl(static_cast< const Token * >(nullptr));
-}
-
-}
-
-template < typename T >
-constexpr auto
-compose_token(const T & val)
-{
-    return detail::compose_token_impl(&val);
-}
 
 namespace detail
 {
 
-template<typename T>
-auto foo(T&&);
 
-template<typename Token>
-auto pick_executor(Token && token)
+template<typename CompletionHandler>
+auto pick_executor(CompletionHandler && completion_handler)
 {
-    return asio::get_associated_executor(token);
+    return asio::get_associated_executor(completion_handler);
 }
 
 
-template<typename Token,
+template<typename CompletionHandler,
          typename First,
          typename ... IoObjectsOrExecutors>
-auto pick_executor(Token && token,
+auto pick_executor(CompletionHandler && completion_handler,
                    const First & first,
                    IoObjectsOrExecutors && ... io_objects_or_executors)
     -> typename std::enable_if<
@@ -119,10 +75,10 @@ auto pick_executor(Token && token,
 }
 
 
-template<typename Token,
+template<typename CompletionHandler,
            typename First,
            typename ... IoObjectsOrExecutors>
-auto pick_executor(Token && token,
+auto pick_executor(CompletionHandler && completion_handler,
                    First & first,
                    IoObjectsOrExecutors && ... io_objects_or_executors)
     -> typename First::executor_type
@@ -132,14 +88,14 @@ auto pick_executor(Token && token,
 
 
 
-template<typename Token,
+template<typename CompletionHandler,
            typename First,
            typename ... IoObjectsOrExecutors>
-auto pick_executor(Token && token,
+auto pick_executor(CompletionHandler && completion_handler,
                    First &&,
                    IoObjectsOrExecutors && ... io_objects_or_executors)
 {
-    return pick_executor(std::forward<Token>(token),
+    return pick_executor(std::forward<CompletionHandler>(completion_handler),
                          std::forward<IoObjectsOrExecutors>(io_objects_or_executors)...);
 }
 
@@ -159,16 +115,15 @@ struct compose_promise_base<Derived, void(Args...)>
     using tuple_type = std::tuple<Args...>;
 };
 
-template<typename Return, typename Tag, typename Token, typename ... Args>
+template<typename Return, typename CompletionHandler, typename ... Args>
 struct compose_promise;
 
-template<typename Allocator, typename Tag, typename Token, typename ... Args>
+template<typename Allocator, typename CompletionHandler, typename ... Args>
 struct compose_promise_alloc_base
 {
     using allocator_type = Allocator;
     void* operator new(const std::size_t size,
-                 Args & ... args, Token & tk,
-                 Tag)
+                 Args & ... args, CompletionHandler & tk)
     {
         using alloc_type = typename std::allocator_traits<allocator_type>:: template rebind_alloc<unsigned char>;
         alloc_type alloc{asio::get_associated_allocator(tk)};
@@ -199,56 +154,56 @@ struct compose_promise_alloc_base
     }
 };
 
-template<typename Tag, typename Token, typename ... Args>
-struct compose_promise_alloc_base<std::allocator<void>, Tag, Token, Args...>
+template<typename Tag, typename CompletionHandler, typename ... Args>
+struct compose_promise_alloc_base<std::allocator<void>, Tag, CompletionHandler, Args...>
 {
 };
 
 
-template<typename Return, typename ...Sigs, typename Token, typename ... Args>
-struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
+template<typename ...Sigs, typename CompletionHandler, typename ... Args>
+struct compose_promise<async<Sigs...>, CompletionHandler, Args...>
     :
     compose_promise_alloc_base<
-        asio::associated_allocator_t<std::decay_t<Token>>, compose_tag<Sigs...>, Token, Args...>,
-    compose_promise_base<compose_promise<Return, compose_tag<Sigs...>, Token, Args...>, Sigs> ...
+        asio::associated_allocator_t<std::decay_t<CompletionHandler>>, CompletionHandler, Args...>,
+    compose_promise_base<compose_promise<async<Sigs...>, CompletionHandler, Args...>, Sigs> ...
 {
-    using my_type = compose_promise<Return, compose_tag<Sigs...>, Token, Args...>;
+    using my_type = compose_promise<async<Sigs...>, CompletionHandler, Args...>;
     using compose_promise_base<my_type, Sigs> ::return_value ...;
     using result_type = std::variant<typename compose_promise_base<my_type, Sigs>::tuple_type ...>;
 
-    using token_type = std::decay_t<Token>;
+    using completion_handler_type = std::decay_t<CompletionHandler>;
 
     std::optional<result_type> result_;
 
-    token_type token;
-    using allocator_type = asio::associated_allocator_t<token_type>;
+    completion_handler_type completion_handler;
+    using allocator_type = asio::associated_allocator_t<completion_handler_type>;
 
     asio::cancellation_state state{
-        asio::get_associated_cancellation_slot(token),
+        asio::get_associated_cancellation_slot(completion_handler),
         asio::enable_terminal_cancellation()
     };
 
     using executor_type =
         typename asio::prefer_result<
-            decltype(pick_executor(std::declval<Token>(), std::declval<Args>()...)),
+            decltype(pick_executor(std::declval<CompletionHandler>(), std::declval<Args>()...)),
             asio::execution::outstanding_work_t::tracked_t>::type;
 
     executor_type executor_;
     bool did_suspend = false;
 
 #if defined(__clang__) || defined(_MSC_FULL_VER)
-    compose_promise(Args &... args, Token & tk, const compose_tag<Sigs...> &)
-        : token(static_cast<Token>(tk)), executor_(
+    compose_promise(Args &... args, CompletionHandler & tk)
+        : completion_handler(static_cast<CompletionHandler>(tk)), executor_(
           asio::prefer(
-            pick_executor(token, args...),
+            pick_executor(completion_handler, args...),
               asio::execution::outstanding_work.tracked))
     {
     }
 #else
-    compose_promise(Args &... args, Token && tk, const compose_tag<Sigs...> &)
-    : token(static_cast<Token>(tk)), executor_(
+    compose_promise(Args &... args, CompletionHandler && tk)
+    : completion_handler(static_cast<CompletionHandler>(tk)), executor_(
           asio::prefer(
-              pick_executor(token, args...),
+              pick_executor(completion_handler, args...),
               asio::execution::outstanding_work.tracked))
     {
     }
@@ -256,13 +211,13 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
 
     ~compose_promise()
     {
-        if (completion && result_)
+        if (result_)
             std::visit(
                 [this](auto & tup)
                 {
                     auto cpl =
                             [tup = std::move(tup),
-                             completion = std::move(*completion)]() mutable
+                             completion = std::move(completion_handler)]() mutable
                             {
                                 std::apply(std::move(completion), std::move(tup));
                             };
@@ -306,7 +261,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
                 using allocator_type = typename compose_promise::allocator_type;
                 allocator_type get_allocator() const noexcept
                 {
-                    return asio::get_associated_allocator(self->token);
+                    return asio::get_associated_allocator(self->completion_handler);
                 }
 
                 void operator()(Args_ ... args)
@@ -395,7 +350,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
         struct result
         {
             asio::cancellation_state &state;
-            token_type & token;
+            completion_handler_type & completion_handler;
 
             bool await_ready() const noexcept
             {
@@ -408,11 +363,10 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
 
             auto await_resume() const
             {
-                state = asio::cancellation_state(asio::get_associated_cancellation_slot(token));
+                state = asio::cancellation_state(asio::get_associated_cancellation_slot(completion_handler));
             }
         };
-
-        return result{state, token};
+        return result{state, completion_handler};
     }
 
     // This await transformation resets the associated cancellation state.
@@ -424,7 +378,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
         {
             asio::cancellation_state & state;
             Filter filter_;
-            token_type & token;
+            completion_handler_type & completion_handler;
 
             bool await_ready() const noexcept
             {
@@ -438,12 +392,12 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
             auto await_resume()
             {
                 state = asio::cancellation_state(
-                    asio::get_associated_cancellation_slot(token),
+                    asio::get_associated_cancellation_slot(completion_handler),
                     ASIO_MOVE_CAST(Filter)(filter_));
             }
         };
 
-        return result{state, ASIO_MOVE_CAST(Filter)(reset.filter), token};
+        return result{state, ASIO_MOVE_CAST(Filter)(reset.filter), completion_handler};
     }
 
     // This await transformation resets the associated cancellation state.
@@ -457,7 +411,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
             asio::cancellation_state & state;
             InFilter in_filter_;
             OutFilter out_filter_;
-            token_type & token;
+            completion_handler_type & completion_handler;
 
 
             bool await_ready() const noexcept
@@ -472,7 +426,7 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
             auto await_resume()
             {
                 state = asio::cancellation_state(
-                    asio::get_associated_cancellation_slot(token),
+                    asio::get_associated_cancellation_slot(completion_handler),
                     ASIO_MOVE_CAST(InFilter)(in_filter_),
                     ASIO_MOVE_CAST(OutFilter)(out_filter_));
             }
@@ -481,16 +435,18 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
         return result{state,
                       ASIO_MOVE_CAST(InFilter)(reset.in_filter),
                       ASIO_MOVE_CAST(OutFilter)(reset.out_filter),
-                      token};
+                      completion_handler};
     }
 
-    auto get_return_object() -> Return
+    auto get_return_object() -> async<Sigs...>
     {
-        return asio::async_initiate<Token, Sigs...>(
-            [this](auto tk)
-            {
-                completion.emplace(std::move(tk));
-            }, token);
+        return  {};
+    }
+
+    template<typename ... Args_, typename ... Rest>
+    void complete(async<void(Args_...), Rest...> )
+    {
+
     }
 
     void unhandled_exception()
@@ -501,105 +457,9 @@ struct compose_promise<Return, compose_tag<Sigs...>, Token, Args...>
                   {
                       std::rethrow_exception(ex);
                   });
-    }
 
-    // TODO implement for overloads
-    using completion_type = typename asio::async_completion<Token, Sigs...>::completion_handler_type;
-    std::optional<completion_type> completion;
-};
-
-template<typename Return, typename Executor, typename Tag, typename Token, typename ... Args>
-struct awaitable_compose_promise;
-
-template<typename Return, typename Executor, typename ... Args_, typename Token, typename ... Args>
-struct awaitable_compose_promise<Return, Executor, compose_tag<void(Args_...)>, Token, Args...>
-    :  std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type
-{
-    using base_type = typename std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type;
-
-    void return_value_impl(asio::error_code ec, Return && result)
-    {
-        if (ec)
-            this->set_error(ec);
-        else
-            this->base_type::return_value(std::move(result));
-    }
-    void return_value_impl(std::exception_ptr e, Return && result)
-    {
-        if (e)
-            this->set_except(e);
-        else
-            this->base_type::return_value(std::move(result));
-    }
-
-    auto return_value(std::tuple<Args_ ...> result)
-    {
-        if constexpr (std::is_same_v<Return, std::tuple<Args_...>>)
-            this->base_type::return_value(std::forward<Return>(result));
-        else
-            std::apply(
-                [this](auto ... args)
-                {
-                    return_value_impl(std::move(args)...);
-                }, std::move(result));
-    }
-
-    void unhandled_exception()
-    {
-        throw ;
     }
 };
-
-struct void_t {};
-
-template<typename Executor, typename ... Args_, typename Token, typename ... Args>
-struct awaitable_compose_promise<void, Executor, compose_tag<void(Args_...)>, Token, Args...>
-    :  std::coroutine_traits<asio::awaitable<void_t, Executor>>::promise_type
-{
-
-
-    using base_type = typename std::coroutine_traits<asio::awaitable<void_t, Executor>>::promise_type;
-
-    asio::awaitable<void, Executor> get_return_object() noexcept
-    {
-        co_await base_type::get_return_object();
-    };
-
-
-    void return_value_impl(asio::error_code ec)
-    {
-        if (ec)
-            this->set_error(ec);
-        else
-            this->base_type::return_value(void_t{});
-    }
-    template<typename = void>
-    void return_value_impl(std::exception_ptr e)
-    {
-        if (e)
-            this->set_except(e);
-        else
-            this->base_type::return_value(void_t{});
-    }
-
-    auto return_value(std::tuple<Args_ ...> result)
-    {
-        if constexpr (sizeof...(Args_))
-            this->base_type::return_value(void_t{});
-        else
-            std::apply(
-                [this](auto ... args)
-                {
-                    return_value_impl(std::move(args)...);
-                }, std::move(result));
-    }
-
-    void unhandled_exception()
-    {
-        throw ;
-    }
-};
-
 
 }
 
@@ -608,42 +468,23 @@ struct awaitable_compose_promise<void, Executor, compose_tag<void(Args_...)>, To
 namespace std
 {
 
-// this is hack AF
-template<typename Return, typename Executor, typename Tag, typename Token, typename ... Args>
-struct coroutine_handle<asioex::detail::awaitable_compose_promise<Return, Executor, Tag, Token, Args...>>
-    : coroutine_handle<typename std::coroutine_traits<asio::awaitable<Return, Executor>>::promise_type>
+template<typename ...Sigs, typename ... Args>
+struct coroutine_traits<asioex::async<Sigs...>, Args...>
 {
+    using tuple_type = std::tuple<Args...>;
+    using handler_type = std::tuple_element_t<sizeof...(Args) -1, tuple_type>;
+    using idx_seq = std::make_index_sequence<sizeof...(Args) - 1>;
+
+    template<std::size_t ... Idx>
+    constexpr static  auto make_promise_type_impl(std::index_sequence<Idx...>)
+        //-> std::tuple< std::tuple_element_t<Idx, tuple_type>...>;
+        ->  asioex::detail::compose_promise<
+                asioex::async<Sigs...>,
+                handler_type,
+                std::tuple_element_t<Idx, tuple_type>...>;
+    using promise_type = decltype(make_promise_type_impl(idx_seq{}));
 };
 
-#define ASIOEX_TYPENAME(z, n, text) , typename T##n
-#define ASIOEX_SPEC(z, n, text) , T##n
-#define ASIOEX_TRAIT_DECL(z, n, text) \
-template<typename Return BOOST_PP_REPEAT_2ND(n, ASIOEX_TYPENAME, ), typename Token, typename ... Sigs > \
-struct coroutine_traits<Return BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, ), Token, asioex::compose_tag<Sigs...>> \
-{  \
-    using promise_type = asioex::detail::compose_promise< \
-                            Return, asioex::compose_tag<Sigs...>, Token         \
-                            BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, )>;     \
-};
-
-BOOST_PP_REPEAT(24, ASIOEX_TRAIT_DECL, );
-
-#define ASIOEX_AW_TRAIT_DECL(z, n, text) \
-template<typename Return, typename Executor BOOST_PP_REPEAT_2ND(n, ASIOEX_TYPENAME, ), typename Token, typename ... Sigs > \
-struct coroutine_traits<asio::awaitable<Return, Executor> BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, ), Token, asioex::compose_tag<Sigs...>> \
-{  \
-    using promise_type = asioex::detail::awaitable_compose_promise< \
-                            Return, Executor, asioex::compose_tag<Sigs...>, Token \
-                            BOOST_PP_REPEAT_2ND(n, ASIOEX_SPEC, )>;     \
-};
-
-BOOST_PP_REPEAT(24, ASIOEX_AW_TRAIT_DECL, );
-
-
-
-#undef ASIOEX_TYPENAME
-#undef ASIOEX_SPEC
-#undef ASIOEX_TRAIT_DECL
 
 }
 
