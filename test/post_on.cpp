@@ -17,6 +17,8 @@
 #include <thread>
 #include <tuple>
 
+#if __cpp_lib_jthread
+
 std::mutex iom;
 
 template < class... Ts >
@@ -121,3 +123,12 @@ main()
 
     iocs.wait();
 }
+
+#else
+int
+main()
+{
+
+}
+
+#endif
